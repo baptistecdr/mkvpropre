@@ -71,8 +71,8 @@ jobs:
       - name: Smoke test the wheel
         run: |
           python -m pip install dist/*.whl
-          normalize-mkv --help > /dev/null
-          python -m normalize_mkv --help > /dev/null
+          mkvpropre --help > /dev/null
+          python -m mkvpropre --help > /dev/null
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

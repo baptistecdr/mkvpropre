@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from normalize_mkv.config import Config
-from normalize_mkv.tools import ToolError
-from normalize_mkv.probe import read_media
-from normalize_mkv.apply import process
+from mkvpropre.config import Config
+from mkvpropre.tools import ToolError
+from mkvpropre.probe import read_media
+from mkvpropre.apply import process
 
 pytestmark = [
     pytest.mark.integration,
@@ -64,7 +64,7 @@ def episode(tmp_path: Path) -> Path:
 
 def run(path: Path, dry: bool, caplog) -> tuple[bool, list[str]]:
     caplog.clear()
-    with caplog.at_level(logging.INFO, logger="normalize_mkv"):
+    with caplog.at_level(logging.INFO, logger="mkvpropre"):
         changed = process(path, Config(), "Pilot", dry)
     return changed, [r.getMessage() for r in caplog.records]
 

@@ -1,4 +1,4 @@
-# normalize-matroska
+# mkvpropre
 
 Normalize MKV episodes and movies so every file looks the same in your player:
 track order, track names, languages, default/forced/original/SDH flags, file
@@ -7,6 +7,9 @@ title. Attachments and tags are removed.
 Everything is lossless: tracks are only reordered (a `mkvmerge` remux, no
 re-encoding), all other changes are made in place with `mkvpropedit`. A file
 that is already normalized is not touched at all.
+
+*mkvpropre*: `mkvpropedit`, the tool doing most of the work, meets the French
+*propre* ("clean"), which is how your files come out.
 
 ## Result
 
@@ -64,8 +67,8 @@ python3 -m venv .venv
 .venv/bin/pip install -e .
 ```
 
-This installs the `normalize-mkv` command in `.venv/bin/`. It can also be run
-as `python -m normalize_mkv`.
+This installs the `mkvpropre` command in `.venv/bin/`. It can also be run
+as `python -m mkvpropre`.
 
 ## Usage
 
@@ -73,13 +76,13 @@ Always start with a dry run: it prints what would be done (track decisions,
 reordering, the exact `mkvpropedit` commands) without changing anything.
 
 ```bash
-.venv/bin/normalize-mkv --dry-run "/Volumes/Media/Series/My Wife And Kids"
+.venv/bin/mkvpropre --dry-run "/Volumes/Media/Series/My Wife And Kids"
 ```
 
 Then apply it:
 
 ```bash
-.venv/bin/normalize-mkv "/Volumes/Media/Series/My Wife And Kids"
+.venv/bin/mkvpropre "/Volumes/Media/Series/My Wife And Kids"
 ```
 
 Folders are scanned recursively for `*.mkv` (hidden files such as macOS `._*`
@@ -90,20 +93,20 @@ processed in the same run.
 
 ```bash
 # A whole movie folder
-.venv/bin/normalize-mkv /Volumes/Media/Movies
+.venv/bin/mkvpropre /Volumes/Media/Movies
 
 # The file name is ambiguous: tell FileBot which show / movie it is
-.venv/bin/normalize-mkv --show "My Wife and Kids (2001)" "Season 1/"
-.venv/bin/normalize-mkv --movie "Dune (1984)" "Dune.mkv"
+.venv/bin/mkvpropre --show "My Wife and Kids (2001)" "Season 1/"
+.venv/bin/mkvpropre --movie "Dune (1984)" "Dune.mkv"
 
 # English titles, from TheTVDB
-.venv/bin/normalize-mkv --titles-lang en --titles-db TheTVDB "My Wife And Kids/"
+.venv/bin/mkvpropre --titles-lang en --titles-db TheTVDB "My Wife And Kids/"
 
 # No FileBot: titles left as they are, VO given by hand
-.venv/bin/normalize-mkv --no-filebot --original fr "Le Prénom.mkv"
+.venv/bin/mkvpropre --no-filebot --original fr "Le Prénom.mkv"
 
 # Only print warnings, errors and the summary
-.venv/bin/normalize-mkv -q /Volumes/Media
+.venv/bin/mkvpropre -q /Volumes/Media
 ```
 
 ### Options
@@ -209,7 +212,7 @@ when MKVToolNix is not installed. FileBot is never called by the tests (a fake
 ### Project layout
 
 ```
-normalize_mkv/
+mkvpropre/
   config.py      languages, defaults, thresholds
   model.py       Track, MediaFile… (what a file contains)
   tools.py       running MKVToolNix

@@ -73,7 +73,7 @@ def file_config(cfg: Config, info: FileInfo, original: str | None) -> tuple[Conf
 
 
 def parse_args(argv: list[str] | None, defaults: Config) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(prog="normalize-mkv", description=__doc__,
+    ap = argparse.ArgumentParser(prog="mkvpropre", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", type=Path, metavar="FILE_OR_DIR")
     ap.add_argument("--dry-run", action="store_true", help="show what would be done, change nothing")

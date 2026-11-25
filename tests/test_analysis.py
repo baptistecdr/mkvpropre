@@ -5,9 +5,9 @@ import struct
 
 import pytest
 
-from normalize_mkv.model import ContentStats
-from normalize_mkv.subtitles import ANALYZERS, SDH_MARKERS, analyze_pgs, analyze_text, analyze_vobsub, parse_text_events
-from normalize_mkv.plan import detect_lang
+from mkvpropre.model import ContentStats
+from mkvpropre.subtitles import ANALYZERS, SDH_MARKERS, analyze_pgs, analyze_text, analyze_vobsub, parse_text_events
+from mkvpropre.plan import detect_lang
 from conftest import track
 
 

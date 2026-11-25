@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-import normalize_mkv.apply
-from normalize_mkv.apply import remux
-from normalize_mkv.cli import find_files
-from normalize_mkv.tools import ToolError, run_tool
+import mkvpropre.apply
+from mkvpropre.apply import remux
+from mkvpropre.cli import find_files
+from mkvpropre.tools import ToolError, run_tool
 
 
 def fake_tool(tmp_path: Path, exit_code: int, stdout: str = "", stderr: str = "") -> str:
@@ -48,7 +48,7 @@ def test_failed_remux_removes_temp_file_and_keeps_original(tmp_path, monkeypatch
         Path(cmd[cmd.index("-o") + 1]).write_bytes(b"partial")
         raise ToolError("mkvmerge failed (exit 2): disk full")
 
-    monkeypatch.setattr(normalize_mkv.apply, "run_tool", failing_mkvmerge)
+    monkeypatch.setattr(mkvpropre.apply, "run_tool", failing_mkvmerge)
     with pytest.raises(ToolError):
         remux(episode, [1, 0])
     assert episode.read_bytes() == b"original"
@@ -65,7 +65,7 @@ def test_successful_remux_replaces_original(tmp_path, monkeypatch):
         Path(cmd[cmd.index("-o") + 1]).write_bytes(b"reordered")
         return ""
 
-    monkeypatch.setattr(normalize_mkv.apply, "run_tool", mkvmerge)
+    monkeypatch.setattr(mkvpropre.apply, "run_tool", mkvmerge)
     remux(episode, [2, 0, 1])
     assert episode.read_bytes() == b"reordered"
     assert calls[0][calls[0].index("--track-order") + 1] == "0:2,0:0,0:1"

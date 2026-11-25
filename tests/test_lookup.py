@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-import normalize_mkv.cli
-from normalize_mkv.config import Config
-from normalize_mkv.lookup import (FileBotError, FileInfo, Lookup, MovieInfo, SeriesInfo, episode_key,
+import mkvpropre.cli
+from mkvpropre.config import Config
+from mkvpropre.lookup import (FileBotError, FileInfo, Lookup, MovieInfo, SeriesInfo, episode_key,
                                   fetch_movie, fetch_series, movie_query, show_name)
 
 RELEASE = "My Wife And Kids.S01E{:02}.MULTI.1080p.WEB.H265-FTMVHD.mkv"
@@ -236,10 +236,10 @@ def test_failures_are_logged_not_fatal(tmp_path, caplog):
 # --- CLI ---------------------------------------------------------------------------------------
 
 def test_cli_requires_filebot_unless_disabled(tmp_path, monkeypatch):
-    monkeypatch.setattr(normalize_mkv.cli, "missing_tools", lambda: [])
-    monkeypatch.setattr(normalize_mkv.cli, "filebot_available", lambda: False)
-    assert normalize_mkv.cli.main([str(tmp_path)]) == 2
-    assert normalize_mkv.cli.main(["--no-filebot", str(tmp_path)]) == 0     # empty folder
+    monkeypatch.setattr(mkvpropre.cli, "missing_tools", lambda: [])
+    monkeypatch.setattr(mkvpropre.cli, "filebot_available", lambda: False)
+    assert mkvpropre.cli.main([str(tmp_path)]) == 2
+    assert mkvpropre.cli.main(["--no-filebot", str(tmp_path)]) == 0     # empty folder
 
 
 @pytest.mark.parametrize("info, original, expected_vo, expected_audio", [
@@ -250,5 +250,5 @@ def test_cli_requires_filebot_unless_disabled(tmp_path, monkeypatch):
     (FileInfo(), None, "en", "en"),                            # nothing known: defaults
 ])
 def test_file_config(info, original, expected_vo, expected_audio):
-    cfg, _ = normalize_mkv.cli.file_config(Config(), info, original)
+    cfg, _ = mkvpropre.cli.file_config(Config(), info, original)
     assert (cfg.original, cfg.default_audio) == (expected_vo, expected_audio)

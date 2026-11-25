@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from normalize_mkv.config import Config
-from normalize_mkv.model import ContentStats, MediaFile, Track
+from mkvpropre.config import Config
+from mkvpropre.model import ContentStats, MediaFile, Track
 
 MINUTES_21 = 21 * 60 * 10**9
 

@@ -5,9 +5,9 @@ from dataclasses import replace
 
 import pytest
 
-from normalize_mkv.config import Kind, Variant
-from normalize_mkv.model import Attachment, PROPERTY_KEYS
-from normalize_mkv.plan import (ContentVerdict, Plan, PlanError, TrackPlan, content_verdicts,
+from mkvpropre.config import Kind, Variant
+from mkvpropre.model import Attachment, PROPERTY_KEYS
+from mkvpropre.plan import (ContentVerdict, Plan, PlanError, TrackPlan, content_verdicts,
                                 decide_variant, language_order, make_plan, metadata_variant)
 from conftest import media, stats, track
 

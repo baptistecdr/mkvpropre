@@ -2,7 +2,7 @@ name: Release
 
 # Push a version tag to publish a GitHub release with the sdist and wheel:
 #   git tag v0.1.0 && git push origin v0.1.0
-# The tag must match normalize_mkv.__version__.
+# The tag must match mkvpropre.__version__.
 
 on:
   push:
@@ -29,9 +29,9 @@ jobs:
 
       - name: Check the tag matches the package version
         run: |
-          version=$(python -c "import normalize_mkv; print(normalize_mkv.__version__)")
+          version=$(python -c "import mkvpropre; print(mkvpropre.__version__)")
           if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match normalize_mkv.__version__ ($version)"
+            echo "::error::tag $GITHUB_REF_NAME does not match mkvpropre.__version__ ($version)"
             exit 1
           fi
 
