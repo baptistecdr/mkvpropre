@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "normalize-matroska"
+dynamic = ["version"]
+description = "Normalize MKV episodes and movies: track order, names, languages, flags, attachments and tags"
+readme = "README.md"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+normalize-mkv = "normalize_mkv.cli:main"
+
+[tool.setuptools]
+packages = ["normalize_mkv"]
+
+[tool.setuptools.dynamic]
+version = { attr = "normalize_mkv.__version__" }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = ["integration: needs MKVToolNix installed (skipped otherwise)"]
