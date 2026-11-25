@@ -201,22 +201,37 @@ Only `filebot -list` is used: it needs no FileBot licence and never touches your
   (2017). A warning is printed when the file has no year, or when FileBot's match has a different year.
 - The VO is FileBot's *original language* of the series or movie.
 
+### Québec French and audio description
+
+Multi-language releases often carry extra French tracks next to the France French ones ("VF2", "AD" in the name):
+
+- **Québec French (VFQ)**, audio and subtitles: tracks tagged `fr-CA`, or named `VFQ`, `CA`, `Québécois`… when the
+  tag has no region;
+- **audio description** (narration for the visually impaired): the visually-impaired flag, or a name such as `AD`,
+  `Audio Description`, `malvoyants`.
+
+They are treated as other tracks: kept at the end, untouched and never default, and removed with
+`--drop-other-tracks`. The France French track stays the main one. A variant is only set aside when a France French
+track of the same kind remains, so a movie released only in VFQ, or a file whose only French audio is the audio
+description, keeps it as its French track.
+
 ### Removing other tracks
 
 With `--drop-other-tracks`, every track that isn't the video or English / French audio and subtitles is removed
-(in the same lossless remux as the reordering): other languages, commentaries, tracks with an unknown language.
+(in the same lossless remux as the reordering): other languages, commentaries, tracks with an unknown language,
+Québec French and audio description.
 Two kinds of track are always kept, with a warning:
 
-- the audio in the VO language, e.g. the Japanese audio of a Japanese film (the VO isn't English or French, so its
-  audio counts as an "other" track);
+- the audio in the VO language when it has no main track, e.g. the Japanese audio of a Japanese film (the VO isn't
+  English or French, so its audio counts as an "other" track);
 - any audio when the file has no English / French audio, so a file with untagged audio never loses its sound.
 
 The dry run lists the tracks that would be removed.
 
 ### Ambiguous files are skipped, not guessed
 
-A file is skipped (and listed in the summary) when mkvpropre can't safely decide, for example two French main audio
-tracks (VFF + VFQ), or two French full subtitle tracks. Nothing is changed in that file.
+A file is skipped (and listed in the summary) when mkvpropre can't safely decide, for example two France French
+audio tracks (two dubs, or 5.1 and 2.0), or two French full subtitle tracks. Nothing is changed in that file.
 
 ### Safety
 

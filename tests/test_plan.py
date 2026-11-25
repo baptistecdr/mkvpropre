@@ -8,7 +8,8 @@ import pytest
 from mkvpropre.config import Kind, Variant
 from mkvpropre.model import Attachment, PROPERTY_KEYS
 from mkvpropre.plan import (ContentVerdict, Plan, PlanError, TrackPlan, content_verdicts,
-                                decide_variant, language_order, make_plan, metadata_variant)
+                                decide_variant, is_audio_description, is_quebec, language_order, make_plan,
+                                metadata_variant)
 from conftest import media, stats, track
 
 
@@ -160,7 +161,7 @@ def test_reorder_to_target_layout(cfg):
     assert plan.needs_remux
     assert plan.order == [2, 3, 1, 4, 0, 5]
     assert plan.tracks[-1].kind is Kind.OTHER and plan.tracks[-1].target == {"flag-default": "0"}
-    assert any("unrecognised tracks" in w for w in plan.warnings)
+    assert any("other tracks kept at the end" in w for w in plan.warnings)
 
 
 def test_subtitle_variants_order_and_names(cfg):
@@ -315,8 +316,8 @@ def test_with_original(cfg):
 # --- make_plan: ambiguity ------------------------------------------------------------------
 
 def test_two_main_audio_tracks_same_language_is_an_error(cfg):
-    m = media(track(0, "video"), track(1, "audio", lang="fre", name="VFF"),
-              track(2, "audio", lang="fre", name="VFQ"))
+    m = media(track(0, "video"), track(1, "audio", lang="fre", ietf="fr-FR", name="VF 5.1"),
+              track(2, "audio", lang="fre", ietf="fr-FR", name="VF 2.0"))
     with pytest.raises(PlanError, match="2 'fr' audio tracks"):
         make_plan(m, cfg, None)
 
@@ -423,3 +424,115 @@ def test_after_dropping_the_plan_is_stable(cfg):
     first = make_plan(mixed_file(), drop_cfg, None)
     second = make_plan(first.media.reordered(first.order), drop_cfg, None)
     assert second.dropped == () and not second.needs_remux
+
+
+
+# --- Québec French and audio description ---------------------------------------------------------
+
+def social_reckoning():
+    """Real track list of The.Social.Reckoning.2026.MULTI.VF2.Ad.2160P.WEBRip...-Amen.mkv"""
+    return media(
+        track(0, "video", lang="und", ietf="und", default_track=True),
+        track(1, "audio", lang="fre", ietf="fr-FR", name="French", default_track=True),
+        track(2, "audio", lang="fre", ietf="fr-CA", name="French CA"),
+        track(3, "audio", lang="fre", ietf="fr-FR", name="French AD"),
+        track(4, "audio", lang="eng", ietf="en", name="English"),
+        track(5, "subtitles", lang="fre", ietf="fr-FR", name="French Forced", default_track=True, forced_track=True),
+        track(6, "subtitles", lang="fre", ietf="fr-FR", name="French Full"),
+        track(7, "subtitles", lang="fre", ietf="fr-CA", name="French CA Full"),
+        track(8, "subtitles", lang="fre", ietf="fr-CA", name="French CA SDH", flag_hearing_impaired=True),
+        track(9, "subtitles", lang="eng", ietf="en", name="English Full"),
+        track(10, "subtitles", lang="eng", ietf="en", name="English SDH", flag_hearing_impaired=True),
+        content={5: stats(40, 0.0), 6: stats(1300, 0.0), 7: stats(1310, 0.0), 8: stats(1500, 0.12),
+                 9: stats(1290, 0.0), 10: stats(1480, 0.15)},
+        duration_ns=120 * 60 * 10**9)
+
+
+def test_vfq_and_audio_description_are_kept_at_the_end_by_default(cfg):
+    plan = make_plan(social_reckoning(), cfg, "The Social Reckoning")
+    assert plan.dropped == ()
+    layout = [(tp.track.id, tp.kind, tp.target.get("name"), tp.target["flag-default"]) for tp in plan.tracks]
+    assert layout == [
+        (0, Kind.VIDEO, "The Social Reckoning", "1"),
+        (4, Kind.AUDIO, "Anglais", "1"), (1, Kind.AUDIO, "Français", "0"),      # VO first
+        (9, Kind.SUBS, "Anglais", "0"), (10, Kind.SUBS, "Anglais (SDH)", "0"),
+        (6, Kind.SUBS, "Français", "1"), (5, Kind.SUBS, "Français (forcés)", "0"),
+        (2, Kind.OTHER, None, "0"), (3, Kind.OTHER, None, "0"),                # VFQ, AD: untouched, never default
+        (7, Kind.OTHER, None, "0"), (8, Kind.OTHER, None, "0"),
+    ]
+    assert any("other tracks kept at the end: #2 audio fre 'French CA' (Québec French (VFQ)), "
+               "#3 audio fre 'French AD' (audio description)" in w for w in plan.warnings)
+
+
+def test_vfq_and_audio_description_are_removed_with_drop_other(cfg):
+    plan = make_plan(social_reckoning(), replace(cfg, drop_other=True), "x")
+    assert [t.id for t in plan.dropped] == [2, 3, 7, 8]
+    assert [tp.track.id for tp in plan.tracks] == [0, 4, 1, 9, 10, 6, 5]
+    assert any("removing other tracks: #2 audio fre 'French CA' (Québec French (VFQ))" in w for w in plan.warnings)
+
+
+@pytest.mark.parametrize("drop", [False, True])
+def test_plan_is_stable_after_handling_variants(cfg, drop):
+    c = replace(cfg, drop_other=drop)
+    first = make_plan(social_reckoning(), c, "x")
+    second = make_plan(first.media.reordered(first.order), c, "x")
+    assert second.dropped == () and not second.needs_remux
+    assert [tp.target for tp in first.tracks] == [tp.target for tp in second.tracks]
+
+
+def test_french_film_vfq_is_removed_despite_being_french(cfg):
+    # VO French: the VFQ is French too, but the VO is the main French track, so it isn't protected
+    m = media(track(0, "video"), track(1, "audio", lang="fre", ietf="fr-FR", name="VFF"),
+              track(2, "audio", lang="fre", ietf="fr-CA", name="VFQ"), track(3, "audio", lang="eng"))
+    plan = make_plan(m, replace(cfg, drop_other=True).with_original("fr"), "Amélie")
+    assert [t.id for t in plan.dropped] == [2]
+    assert not any("it is the VO" in w for w in plan.warnings)
+
+
+def test_vfq_only_movie_keeps_its_french(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="eng"),
+              track(2, "audio", lang="fre", ietf="fr-CA", name="VFQ"),
+              track(3, "subtitles", lang="fre", ietf="fr-CA", name="French CA"),
+              content={3: stats(1300, 0.0)})
+    plan = make_plan(m, cfg, None)
+    assert plan.dropped == ()
+    assert [tp.target["name"] for tp in by_kind(plan, Kind.AUDIO)] == ["Anglais", "Français"]
+
+
+def test_audio_description_alone_is_kept(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="eng"),
+              track(2, "audio", lang="fre", name="French AD"))
+    assert make_plan(m, cfg, None).dropped == ()
+
+
+@pytest.mark.parametrize("props, name, expected", [
+    ({"ietf": "fr-CA"}, "French", True),
+    ({"ietf": "fr-FR"}, "French", False),
+    ({"ietf": "fr-FR"}, "French CA", False),          # the tag wins when it has a region
+    ({"ietf": "fr"}, "VFQ", True),                     # no region: the name decides
+    ({"ietf": "fr"}, "Québécois", True),
+    ({"ietf": "fr"}, "VFF", False),
+    ({}, "Canadian French", True),
+])
+def test_is_quebec(props, name, expected):
+    assert is_quebec(track(1, "audio", lang="fre", name=name, **props)) is expected
+
+
+@pytest.mark.parametrize("name, flags, expected", [
+    ("French AD", {}, True),
+    ("Audio Description", {}, True),
+    ("Audiodescription", {}, True),
+    ("Français (malvoyants)", {}, True),
+    ("French", {"flag_visual_impaired": True}, True),
+    ("French", {}, False),
+    ("Dolby ADvanced", {}, False),
+    ("VF AD 5.1", {}, True),
+])
+def test_is_audio_description(name, flags, expected):
+    assert is_audio_description(track(1, "audio", lang="fre", name=name, **flags)) is expected
+
+
+def test_english_ca_is_not_treated_as_quebec(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="eng", ietf="en-CA", name="English CA"),
+              track(2, "audio", lang="fre"))
+    assert make_plan(m, cfg, None).dropped == ()

@@ -11,6 +11,44 @@ from .model import ContentStats, MediaFile, Track
 FORCED_NAME_RE = re.compile(r"forc[eé]s?|forced", re.I)
 SDH_NAME_RE = re.compile(r"\b(sdh|cc|malentendants?|sourds)\b", re.I)
 COMMENTARY_NAME_RE = re.compile(r"comment", re.I)
+# Québec French (VFQ): "fr-CA" tag, or the name when there is no region in the tag
+QUEBEC_NAME_RE = re.compile(r"\b(ca|vfq|qu[ée]b[ée]c(ois)?|canad\w*|qc)\b", re.I)
+# Audio description (narration for the visually impaired)
+AD_NAME_RE = re.compile(r"\b(ad|audio[ -]?descri\w*|descri\w*[ -]audio|visually[ -]impaired|malvoyants?)\b", re.I)
+
+
+def is_quebec(track: Track) -> bool:
+    tag = (track.props.get("language_ietf") or "").lower()
+    if tag.startswith("fr-"):
+        return tag == "fr-ca"
+    return bool(QUEBEC_NAME_RE.search(track.name))
+
+
+def is_audio_description(track: Track) -> bool:
+    return bool(track.props.get("flag_visual_impaired")) or bool(AD_NAME_RE.search(track.name))
+
+
+def split_variants(tracks: list[Track], audio: bool, lang: str) -> tuple[list[Track], list[Track], dict[int, str]]:
+    """Set aside Québec French tracks (audio and subtitles) and audio descriptions.
+
+    Returns (main, variants, reason by track id). Variants become "other" tracks:
+    kept at the end, never default, removed with --drop-other-tracks. They are
+    only set aside when a main track of the same kind remains, so a movie
+    released only in VFQ, or with only an audio-description track, keeps it as
+    its French track.
+    """
+    def variant(t: Track) -> str | None:
+        if lang == "fr" and is_quebec(t):
+            return "Québec French (VFQ)"
+        if audio and is_audio_description(t):
+            return "audio description"
+        return None
+
+    reasons = {t.id: why for t in tracks if (why := variant(t))}
+    main = [t for t in tracks if t.id not in reasons]
+    if not reasons or not main:
+        return tracks, [], {}
+    return main, [t for t in tracks if t.id in reasons], reasons
 
 
 class PlanError(Exception):
@@ -165,18 +203,22 @@ def track_language(track: Track) -> str:
     return tag.lower().split("-")[0]
 
 
-def split_other(other: list[Track], has_main_audio: bool, vo: str) -> tuple[list[Track], list[Track], list[str]]:
-    """Which "other" tracks (other languages, commentary, unknown) to remove.
+def split_other(other: list[Track], has_main_audio: bool, vo: str,
+                vo_has_main_audio: bool) -> tuple[list[Track], list[Track], list[str]]:
+    """Which "other" tracks (other languages, commentary, unknown, VFQ, AD) to remove.
 
     Returns (kept, dropped, reasons for keeping). Never removed:
-    - audio in the VO language, e.g. the Japanese audio of a Japanese film
-      (the VO isn't a configured language, so its audio is an "other" track);
+    - audio in the VO language when the VO has no main audio track, e.g. the
+      Japanese audio of a Japanese film (the VO isn't a configured language, so
+      its audio is an "other" track). A French film's VFQ is not protected:
+      its VO is the main French track;
     - any audio, when the file has no English / French audio: removing it
       could leave a file without sound (e.g. untagged "und" tracks).
     """
     kept, dropped, why = [], [], []
     for t in other:
-        if t.type == "audio" and track_language(t) == vo and not COMMENTARY_NAME_RE.search(t.name):
+        if t.type == "audio" and track_language(t) == vo and not vo_has_main_audio \
+                and not COMMENTARY_NAME_RE.search(t.name):
             kept.append(t)
             why.append(f"kept {t.describe()}: it is the VO")
         elif t.type == "audio" and not has_main_audio:
@@ -206,6 +248,20 @@ def make_plan(media: MediaFile, cfg: Config, title: str | None) -> Plan:
         else:
             other.append(t)
 
+    # Québec French and audio description: set aside as "other" tracks
+    variant_why: dict[int, str] = {}
+    for lang in cfg.langs:
+        audio[lang], variants, why = split_variants(audio[lang], audio=True, lang=lang)
+        other += variants
+        variant_why |= why
+        subs[lang], variants, why = split_variants(subs[lang], audio=False, lang=lang)
+        other += variants
+        variant_why |= why
+    other.sort(key=lambda t: t.id)          # file order, stable when planning again after the remux
+
+    def describe(t: Track) -> str:
+        return t.describe() + (f" ({variant_why[t.id]})" if t.id in variant_why else "")
+
     # Sanity checks
     if len(videos) != 1:
         warnings.append(f"{len(videos)} video tracks found")
@@ -220,12 +276,13 @@ def make_plan(media: MediaFile, cfg: Config, title: str | None) -> Plan:
             warnings.append(f"no '{lang}' subtitle track")
     dropped: list[Track] = []
     if cfg.drop_other:
-        other, dropped, kept_why = split_other(other, has_main_audio=any(audio.values()), vo=cfg.original)
+        other, dropped, kept_why = split_other(other, has_main_audio=any(audio.values()), vo=cfg.original,
+                                               vo_has_main_audio=bool(audio.get(cfg.original)))
         warnings += kept_why
         if dropped:
-            warnings.append("removing other tracks: " + ", ".join(t.describe() for t in dropped))
+            warnings.append("removing other tracks: " + ", ".join(describe(t) for t in dropped))
     if other:
-        warnings.append("unrecognised tracks kept at the end: " + ", ".join(t.describe() for t in other))
+        warnings.append("other tracks kept at the end: " + ", ".join(describe(t) for t in other))
     if title is None:
         warnings.append("no episode title found, video track name and file title left as is")
     if any(a.is_font for a in media.attachments) and \
