@@ -9,7 +9,7 @@ import pytest
 
 import mkvpropre.cli
 from mkvpropre.config import Config
-from mkvpropre.lookup import (FileBotError, FileInfo, Lookup, MovieInfo, SeriesInfo, episode_key,
+from mkvpropre.lookup import (FileBotError, FileInfo, Lookup, MovieInfo, Naming, SeriesInfo, episode_key,
                                   fetch_movie, fetch_series, movie_query, show_name)
 
 RELEASE = "My Wife And Kids.S01E{:02}.MULTI.1080p.WEB.H265-FTMVHD.mkv"
@@ -80,23 +80,32 @@ def fake_filebot(tmp_path, monkeypatch):
 
 
 def test_fetch_series(fake_filebot):
-    args = fake_filebot("S01E01\tUn papa en or\ten\nS01E02\tLa  vérité blesse\ten\nnoise\nS00E01\tSpécial\ten\n")
+    args = fake_filebot("2692\tMy Wife and Kids\t2001\tS01E01\tUn papa en or\ten\n"
+                        "2692\tMy Wife and Kids\t2001\tS01E02\tLa  vérité blesse\ten\nnoise\n"
+                        "2692\tMy Wife and Kids\t2001\tS00E01\tSpécial\ten\n")
     info = fetch_series("My Wife and Kids", "TheMovieDB::TV", "fr")
-    assert info == SeriesInfo({(1, 1): "Un papa en or", (1, 2): "La vérité blesse", (0, 1): "Spécial"}, "en")
+    assert info == SeriesInfo({(1, 1): "Un papa en or", (1, 2): "La vérité blesse", (0, 1): "Spécial"}, "en",
+                              "2692", "My Wife and Kids", 2001)
     assert args() == ["-list", "--q", "My Wife and Kids", "--db", "TheMovieDB::TV", "--lang", "fr",
-                      "--format", "{s00e00}\t{t}\t{info.originalLanguage}"]
+                      "--format", "{id}\t{n}\t{y}\t{s00e00}\t{t}\t{info.originalLanguage}"]
 
 
 def test_fetch_movie(fake_filebot):
-    args = fake_filebot("Le Fabuleux Destin d'Amélie Poulain\t2001\tfr\tLe Fabuleux Destin d'Amélie Poulain\n")
+    args = fake_filebot("194\tLe Fabuleux Destin d'Amélie Poulain\t2001\tfr\tLe Fabuleux Destin d'Amélie Poulain\t\n")
     assert fetch_movie("Amelie 2001", "fr") == MovieInfo("Le Fabuleux Destin d'Amélie Poulain", 2001, "fr",
-                                                         "Le Fabuleux Destin d'Amélie Poulain")
+                                                         "Le Fabuleux Destin d'Amélie Poulain", "194", None)
     assert args()[:6] == ["-list", "--q", "Amelie 2001", "--db", "TheMovieDB", "--lang"]
 
 
+def test_fetch_movie_with_collection(fake_filebot):
+    fake_filebot("11\tStar Wars\t1977\ten\tStar Wars\tStar Wars Collection\n")
+    assert fetch_movie("11", "en").collection == "Star Wars Collection"
+
+
 def test_fetch_movie_takes_first_match_and_normalizes_language(fake_filebot):
-    fake_filebot("Le Voyage de Chihiro\t2001\tja_JP\tSpirited Away\nAutre\t2002\ten\tOther\n")
-    assert fetch_movie("Spirited Away", "fr") == MovieInfo("Le Voyage de Chihiro", 2001, "ja", "Spirited Away")
+    fake_filebot("129\tLe Voyage de Chihiro\t2001\tja_JP\tSpirited Away\t\n9\tAutre\t2002\ten\tOther\t\n")
+    assert fetch_movie("Spirited Away", "fr") == MovieInfo("Le Voyage de Chihiro", 2001, "ja", "Spirited Away",
+                                                           "129", None)
 
 
 def test_fetch_no_result(fake_filebot):
@@ -114,25 +123,40 @@ def test_fetch_series_licence_error(fake_filebot):
 # --- Lookup ------------------------------------------------------------------------------------
 
 class Fakes:
+    """Fake FileBot. Entries are keyed by query, or "query|lang" for a language-specific answer."""
+
     def __init__(self, series=None, movies=None, fail=False):
-        self.series = series or {"My Wife And Kids": SeriesInfo(
-            {(1, 1): "Un papa en or", (1, 2): "La vérité blesse", (2, 1): "Saison deux"}, "en")}
-        self.movies = movies or {"Amelie 2001": MovieInfo("Le Fabuleux Destin d'Amélie Poulain", 2001, "fr",
-                                                          "Le Fabuleux Destin d'Amélie Poulain")}
+        self.series = series or {
+            "My Wife And Kids": SeriesInfo({(1, 1): "Un papa en or", (1, 2): "La vérité blesse",
+                                            (2, 1): "Saison deux"}, "en", "2692", "Ma femme, mes enfants et moi", 2001),
+            "2692|en": SeriesInfo({(1, 1): "Pilot", (1, 2): "The Truth Hurts", (2, 1): "Season two"}, "en",
+                                  "2692", "My Wife and Kids", 2001),
+        }
+        self.movies = movies or {
+            "Amelie 2001": MovieInfo("Le Fabuleux Destin d'Amélie Poulain", 2001, "fr",
+                                     "Le Fabuleux Destin d'Amélie Poulain", "194"),
+            "194|en": MovieInfo("Amélie", 2001, "fr", "Le Fabuleux Destin d'Amélie Poulain", "194"),
+        }
         self.fail = fail
         self.calls: list[tuple] = []
 
+    @staticmethod
+    def _get(table, query, lang):
+        return table.get(f"{query}|{lang}") or table.get(query)
+
     def series_fetcher(self, show, db, lang):
         self.calls.append(("series", show, db, lang))
-        if self.fail or show not in self.series:
+        info = None if self.fail else self._get(self.series, show, lang)
+        if not info:
             raise FileBotError(f"FileBot found nothing for {show!r}")
-        return self.series[show]
+        return info
 
     def movie_fetcher(self, query, lang):
         self.calls.append(("movie", query, lang))
-        if self.fail or query not in self.movies:
+        info = None if self.fail else self._get(self.movies, query, lang)
+        if not info:
             raise FileBotError(f"FileBot found nothing for {query!r}")
-        return self.movies[query]
+        return info
 
     def lookup(self, **kw) -> Lookup:
         return Lookup(series_fetcher=self.series_fetcher, movie_fetcher=self.movie_fetcher, **kw)
@@ -231,6 +255,66 @@ def test_failures_are_logged_not_fatal(tmp_path, caplog):
         lk.prepare(files)
     assert lk.info_for(files[0]) == FileInfo() and lk.info_for(files[1]) == FileInfo()
     assert caplog.text.count("FileBot found nothing") == 2
+
+
+# --- English names (--library) -----------------------------------------------------------------
+
+def test_english_naming_for_episodes_fetched_by_id(tmp_path):
+    fakes = Fakes()
+    files = episodes(tmp_path, 1, 2)
+    lk = fakes.lookup(english=True)
+    lk.prepare(files)
+    info = lk.info_for(files[1])
+    assert info.title == "La vérité blesse"                      # MKV title stays French
+    assert info.naming == Naming("episode", "My Wife and Kids", 2001, season=1, episode=2,
+                                 episode_title="The Truth Hurts")
+    assert fakes.calls == [("series", "My Wife And Kids", "TheMovieDB::TV", "fr"),
+                           ("series", "2692", "TheMovieDB::TV", "en")]   # same show, by id
+
+
+def test_english_naming_for_movies_fetched_by_id(tmp_path):
+    fakes = Fakes()
+    f = tmp_path / "Amelie.2001.MULTI.1080p.BluRay.x264-GROUP.mkv"
+    lk = fakes.lookup(english=True)
+    lk.prepare([f])
+    assert lk.info_for(f).naming == Naming("movie", "Amélie", 2001)
+    assert fakes.calls == [("movie", "Amelie 2001", "fr"), ("movie", "194", "en")]
+
+
+def test_no_second_query_when_titles_are_already_english(tmp_path):
+    fakes = Fakes(movies={"Dune 2021": MovieInfo("Dune", 2021, "en", "Dune", "438631", "Dune Collection")})
+    f = tmp_path / "Dune.2021.mkv"
+    lk = fakes.lookup(english=True, lang="en")
+    lk.prepare([f])
+    assert lk.info_for(f).naming == Naming("movie", "Dune", 2021, collection="Dune Collection")
+    assert len(fakes.calls) == 1
+
+
+def test_no_english_names_without_library(tmp_path):
+    fakes = Fakes()
+    f = tmp_path / "Amelie.2001.mkv"
+    lk = fakes.lookup()
+    lk.prepare([f])
+    assert lk.info_for(f).naming is None and len(fakes.calls) == 1
+
+
+class EnglishDown(Fakes):
+    """FileBot answers in French, fails in English."""
+
+    def movie_fetcher(self, query, lang):
+        if lang == "en":
+            raise FileBotError("FileBot found nothing (network down)")
+        return super().movie_fetcher(query, lang)
+
+
+def test_english_lookup_failure_means_no_naming(tmp_path, caplog):
+    f = tmp_path / "Amelie.2001.mkv"
+    lk = EnglishDown().lookup(english=True)
+    with caplog.at_level(logging.ERROR):
+        lk.prepare([f])
+    info = lk.info_for(f)
+    assert info.title == "Le Fabuleux Destin d'Amélie Poulain" and info.naming is None
+    assert "no English names" in caplog.text
 
 
 # --- CLI ---------------------------------------------------------------------------------------

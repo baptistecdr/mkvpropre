@@ -107,7 +107,42 @@ processed in the same run.
 
 # Only print warnings, errors and the summary
 .venv/bin/mkvpropre -q /Volumes/Media
+
+# Normalize a download, then move it to the library
+.venv/bin/mkvpropre --library /media/raid/cinemas "/media/raid/downloads/Amelie.2001.MULTI.1080p.BluRay.x264-GROUP"
 ```
+
+### Moving to a library
+
+With `--library DIR`, each file that was normalized successfully is moved into
+`DIR/movies` or `DIR/tvshows`, renamed with **English** names following the
+Plex / Jellyfin conventions (the MKV title itself stays in `--titles-lang`):
+
+```
+/media/raid/cinemas/
+├── movies/
+│   ├── Amélie (2001).mkv
+│   ├── Mission - Impossible - Fallout (2018).mkv      ← "Mission: Impossible", ":" is not allowed
+│   └── Star Wars/                                      ← sagas (TheMovieDB collections) get a folder
+│       ├── Star Wars (1977).mkv
+│       └── The Empire Strikes Back (1980).mkv
+└── tvshows/
+    └── My Wife and Kids (2001)/
+        └── Season 01/
+            ├── My Wife and Kids (2001) - S01E01 - Pilot.mkv
+            └── My Wife and Kids (2001) - S01E02 - The Truth Hurts.mkv
+```
+
+- English names come from a second FileBot query by TheMovieDB id, so they
+  always match the same movie / show as the French title.
+- Only files that went through without error are moved; the others stay in
+  the download folder and are listed in the summary.
+- An existing file in the library is never overwritten (the file is left
+  where it is and reported).
+- On the same file system the move is an instant rename; across file systems
+  the file is copied, checked, then the original is deleted.
+- `--dry-run` shows the destination of each file.
+- Specials (season 0) go to a `Specials` folder.
 
 ### Options
 
@@ -115,6 +150,7 @@ processed in the same run.
 |---|---|---|
 | `-V`, `--version` | | Print the installed version and exit |
 | `--dry-run` | | Show what would be done, change nothing |
+| `--library DIR` | | Move normalized files to `DIR/movies` or `DIR/tvshows`, with English names |
 | `-q`, `--quiet` | | Only print warnings and errors |
 | **Title and VO** | | |
 | `--show NAME` | from file / folder names | Series name for FileBot |
@@ -136,8 +172,8 @@ processed in the same run.
 | Code | Meaning |
 |---|---|
 | `0` | All files normalized (or already were) |
-| `1` | Some files were skipped (see the summary) |
-| `2` | MKVToolNix or FileBot is missing |
+| `1` | Some files were skipped or not moved (see the summary) |
+| `2` | MKVToolNix or FileBot is missing, or bad arguments |
 
 ## How it works
 
@@ -221,7 +257,8 @@ mkvpropre/
   probe.py       file -> MediaFile
   plan.py        MediaFile -> Plan (pure logic, no I/O)
   apply.py       Plan -> changes on disk
-  lookup.py      title and VO with FileBot
+  lookup.py      title, VO and English names with FileBot
+  library.py     library paths and safe moves (--library)
   cli.py         command line
 tests/           pytest suite
 ```

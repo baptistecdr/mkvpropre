@@ -37,16 +37,32 @@ class FileBotError(Exception):
 
 
 @dataclass(frozen=True)
+class Naming:
+    """English names for the library (see library.py)."""
+    kind: str                        # "movie" or "episode"
+    name: str                        # movie title or show name
+    year: int | None
+    collection: str | None = None    # movie saga, e.g. "Star Wars Collection"
+    season: int | None = None
+    episode: int | None = None
+    episode_title: str | None = None
+
+
+@dataclass(frozen=True)
 class FileInfo:
-    title: str | None = None
+    title: str | None = None         # in --titles-lang, for the MKV title
     original: str | None = None      # ISO 639-1, e.g. "en", "fr", "ja"
     source: str = ""                 # what it was matched as, for the logs
+    naming: Naming | None = None     # English names, when asked for (--library)
 
 
 @dataclass(frozen=True)
 class SeriesInfo:
     titles: dict[EpisodeKey, str]
     original: str | None
+    id: str = ""                     # TheMovieDB id
+    name: str = ""
+    year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +71,8 @@ class MovieInfo:
     year: int | None
     original: str | None
     original_title: str = ""
+    id: str = ""                     # TheMovieDB id
+    collection: str | None = None
 
 
 # --- Names from paths ------------------------------------------------------------------
@@ -128,25 +146,32 @@ def filebot_list(query: str, db: str, lang: str, fields: list[str]) -> list[list
     return rows
 
 
-def fetch_series(show: str, db: str, lang: str) -> SeriesInfo:
-    rows = filebot_list(show, db, lang, ["{s00e00}", "{t}", "{info.originalLanguage}"])
+def _int(text: str) -> int | None:
+    return int(text) if text.strip().isdigit() else None
+
+
+def fetch_series(query: str, db: str, lang: str) -> SeriesInfo:
+    """`query`: a show name, or a TheMovieDB id for an exact match."""
+    rows = filebot_list(query, db, lang,
+                        ["{id}", "{n}", "{y}", "{s00e00}", "{t}", "{info.originalLanguage}"])
     titles: dict[EpisodeKey, str] = {}
-    original = None
-    for key, title, orig in rows:
+    for _id, _name, _year, key, title, _orig in rows:
         m = EPISODE_RE.fullmatch(key.strip())
         if m and title.strip():
             titles[(int(m[1]), int(m[2]))] = " ".join(title.split())
-            original = original or _primary(orig)
     if not titles:
-        raise FileBotError(f"FileBot returned no episodes for {show!r}")
-    return SeriesInfo(titles, original)
+        raise FileBotError(f"FileBot returned no episodes for {query!r}")
+    show_id, name, year, _key, _title, orig = rows[0]
+    return SeriesInfo(titles, _primary(orig), show_id.strip(), " ".join(name.split()), _int(year))
 
 
 def fetch_movie(query: str, lang: str) -> MovieInfo:
-    rows = filebot_list(query, "TheMovieDB", lang, ["{n}", "{y}", "{info.originalLanguage}", "{primaryTitle}"])
-    title, year, orig, original_title = rows[0]       # FileBot returns its best match first
-    return MovieInfo(" ".join(title.split()), int(year) if year.isdigit() else None,
-                     _primary(orig), original_title.strip())
+    """`query`: a name (best match first), or a TheMovieDB id for an exact match."""
+    rows = filebot_list(query, "TheMovieDB", lang,
+                        ["{id}", "{n}", "{y}", "{info.originalLanguage}", "{primaryTitle}", "{collection}"])
+    movie_id, title, year, orig, original_title, collection = rows[0]
+    return MovieInfo(" ".join(title.split()), _int(year), _primary(orig), original_title.strip(),
+                     movie_id.strip(), collection.strip() or None)
 
 
 # --- Resolver --------------------------------------------------------------------------------
@@ -154,18 +179,28 @@ def fetch_movie(query: str, lang: str) -> MovieInfo:
 SeriesFetcher = Callable[[str, str, str], SeriesInfo]
 MovieFetcher = Callable[[str, str], MovieInfo]
 
+ENGLISH = "en"
+
 
 @dataclass
 class Lookup:
-    """Call prepare() once with all files (one FileBot query per show / movie), then info_for()."""
+    """Call prepare() once with all files (one FileBot query per show / movie), then info_for().
+
+    With `english=True` (--library), each show / movie is also fetched in
+    English, by its TheMovieDB id so it is exactly the same match, for the
+    library file names.
+    """
     db: str = "TheMovieDB::TV"       # for series; movies always use TheMovieDB
     lang: str = "fr"
     show: str | None = None          # --show: skip show-name detection
     movie: str | None = None         # --movie: skip movie-name detection
+    english: bool = False
     series_fetcher: SeriesFetcher = fetch_series
     movie_fetcher: MovieFetcher = fetch_movie
     _series: dict[str, SeriesInfo | None] = field(default_factory=dict, init=False)
+    _series_en: dict[str, SeriesInfo | None] = field(default_factory=dict, init=False)
     _movies: dict[str, MovieInfo | None] = field(default_factory=dict, init=False)
+    _movies_en: dict[str, MovieInfo | None] = field(default_factory=dict, init=False)
 
     def prepare(self, files: list[Path]) -> None:
         by_show: dict[str | None, list[Path]] = {}
@@ -192,12 +227,23 @@ class Lookup:
             series = self._series.get(show) if show else None
             if not series:
                 return FileInfo()
+            naming = None
+            en = self._series_en.get(show) if self.english else None
+            if en:
+                naming = Naming("episode", en.name, en.year, season=key[0], episode=key[1],
+                                episode_title=en.titles.get(key))
             return FileInfo(series.titles.get(key), series.original,
-                            f"{show} S{key[0]:02}E{key[1]:02}")
-        movie = self._movies.get(self._movie_query(path) or "")
+                            f"{show} S{key[0]:02}E{key[1]:02}", naming)
+        query = self._movie_query(path) or ""
+        movie = self._movies.get(query)
         if not movie:
             return FileInfo()
-        return FileInfo(movie.title, movie.original, f"movie {movie.original_title or movie.title} ({movie.year})")
+        naming = None
+        en = self._movies_en.get(query) if self.english else None
+        if en:
+            naming = Naming("movie", en.title, en.year, collection=en.collection)
+        return FileInfo(movie.title, movie.original,
+                        f"movie {movie.original_title or movie.title} ({movie.year})", naming)
 
     # --- internals
 
@@ -220,6 +266,9 @@ class Lookup:
                 log.error("   ✗ %s", e)
                 info = None
             self._series[show] = info
+            if self.english and info:
+                self._series_en[show] = self._english(
+                    info, lambda: self.series_fetcher(info.id or show, self.db, ENGLISH))
         return self._series[show]
 
     def _movie_for(self, path: Path) -> MovieInfo | None:
@@ -242,4 +291,17 @@ class Lookup:
                 log.error("   ✗ %s", e)
                 info = None
             self._movies[query] = info
+            if self.english and info:
+                self._movies_en[query] = self._english(
+                    info, lambda: self.movie_fetcher(info.id or query, ENGLISH))
         return self._movies[query]
+
+    def _english(self, info, fetch):
+        """The English version of a match: the same data when titles are already English."""
+        if self.lang == ENGLISH:
+            return info
+        try:
+            return fetch()
+        except (FileBotError, OSError) as e:
+            log.error("   ✗ no English names for the library: %s", e)
+            return None

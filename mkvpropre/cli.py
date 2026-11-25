@@ -31,7 +31,14 @@ Title and VO come from FileBot (`filebot -list`, no licence needed):
              in the file name
 --show / --movie override the detected names, --original the VO.
 
-Exit code: 0 all files ok, 1 some files skipped, 2 missing tools.
+--library DIR moves each normalized file into DIR, with English names
+(Plex / Jellyfin conventions); files that fail stay where they are:
+  DIR/movies/Amélie (2001).mkv
+  DIR/movies/Star Wars/Star Wars (1977).mkv                (sagas get a folder)
+  DIR/tvshows/My Wife and Kids (2001)/Season 01/My Wife and Kids (2001) - S01E01 - Pilot.mkv
+
+Exit code: 0 all files ok, 1 some files skipped or not moved, 2 missing tools
+or bad arguments.
 """
 from __future__ import annotations
 
@@ -44,6 +51,7 @@ from pathlib import Path
 from . import __version__
 from .apply import process
 from .config import LANGS, Config
+from .library import LibraryError, library_path, move_to_library
 from .lookup import FileInfo, Lookup, filebot_available
 from .plan import PlanError
 from .tools import ToolError, missing_tools
@@ -79,6 +87,9 @@ def parse_args(argv: list[str] | None, defaults: Config) -> argparse.Namespace:
     ap.add_argument("paths", nargs="+", type=Path, metavar="FILE_OR_DIR")
     ap.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     ap.add_argument("--dry-run", action="store_true", help="show what would be done, change nothing")
+    ap.add_argument("--library", type=Path, metavar="DIR",
+                    help="move normalized files to DIR/movies or DIR/tvshows, with English "
+                         "Plex/Jellyfin names (needs FileBot)")
 
     t = ap.add_argument_group("title and VO (FileBot)")
     t.add_argument("--show", help='series name for FileBot, e.g. "My Wife and Kids (2001)" '
@@ -125,16 +136,23 @@ def main(argv: list[str] | None = None) -> int:
         log.error("missing FileBot, needed for titles and VO (brew install --cask filebot), "
                   "or run with --no-filebot")
         return 2
+    if args.library and args.no_filebot:
+        log.error("--library needs FileBot for the English names: drop --no-filebot")
+        return 2
+    if args.library and not args.library.is_dir():
+        log.error("library folder not found: %s", args.library)
+        return 2
 
     cfg = replace(defaults, use_content=not args.no_content, forced_max_ratio=args.forced_ratio,
                   forced_max_per_min=args.forced_per_min, sdh_min_ratio=args.sdh_ratio,
                   default_subs=None if args.default_subs == "none" else args.default_subs)
     files = find_files(args.paths)
-    lookup = Lookup(db=args.titles_db, lang=args.titles_lang, show=args.show, movie=args.movie)
+    lookup = Lookup(db=args.titles_db, lang=args.titles_lang, show=args.show, movie=args.movie,
+                    english=args.library is not None)
     if not args.no_filebot:
         lookup.prepare(files)
 
-    changed, failed = 0, []
+    changed, moved, failed = 0, 0, []
     for f in files:
         info = FileInfo() if args.no_filebot else lookup.info_for(f)
         file_cfg, source = file_config(cfg, info, args.original)
@@ -143,10 +161,23 @@ def main(argv: list[str] | None = None) -> int:
         except (PlanError, ToolError, OSError, ValueError) as e:
             log.error("   ✗ skipped: %s", e)
             failed.append(f)
+            continue
+        if args.library:
+            if not info.naming:
+                log.error("   ✗ not moved: no FileBot match for the library name")
+                failed.append(f)
+                continue
+            try:
+                moved += move_to_library(f, library_path(args.library, info.naming), args.dry_run)
+            except (LibraryError, OSError) as e:
+                log.error("   ✗ %s", e)
+                failed.append(f)
 
     verb = "would change" if args.dry_run else "changed"
-    log.warning("\nDone: %d file(s), %d %s, %d unchanged, %d skipped",
-                len(files), changed, verb, len(files) - changed - len(failed), len(failed))
+    summary = f"\nDone: {len(files)} file(s), {changed} {verb}"
+    if args.library:
+        summary += f", {moved} {'would move' if args.dry_run else 'moved'}"
+    log.warning("%s, %d skipped or not moved", summary, len(failed))
     for f in failed:
         log.warning("   - %s", f)
     return 1 if failed else 0

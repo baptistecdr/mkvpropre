@@ -14,7 +14,8 @@ Modules, each depending only on the ones above it:
   probe      file -> MediaFile
   plan       MediaFile -> Plan
   apply      Plan -> changes on disk
-  lookup     title and VO of episodes and movies, with FileBot
+  lookup     title, VO and English names of episodes and movies, with FileBot
+  library    library paths and safe moves (--library)
   cli        command line
 """
 
