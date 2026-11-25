@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
+import mkvpropre
 import mkvpropre.apply
+import mkvpropre.cli
 from mkvpropre.apply import remux
 from mkvpropre.cli import find_files
 from mkvpropre.tools import ToolError, run_tool
@@ -87,3 +89,15 @@ def test_find_files_skips_hidden_and_temp(tmp_path):
 def test_explicit_file_is_always_kept(tmp_path):
     f = tmp_path / ".hidden.mkv"
     assert find_files([f]) == [f]
+
+
+# --- CLI -----------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("flag", ["--version", "-V"])
+def test_version(flag, capsys, monkeypatch):
+    # works without any path, and before the MKVToolNix / FileBot checks
+    monkeypatch.setattr(mkvpropre.cli, "missing_tools", lambda: ["mkvmerge"])
+    with pytest.raises(SystemExit) as exit_info:
+        mkvpropre.cli.main([flag])
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.strip() == f"mkvpropre {mkvpropre.__version__}"

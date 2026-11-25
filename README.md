@@ -113,6 +113,7 @@ processed in the same run.
 
 | Option | Default | Description |
 |---|---|---|
+| `-V`, `--version` | | Print the installed version and exit |
 | `--dry-run` | | Show what would be done, change nothing |
 | `-q`, `--quiet` | | Only print warnings and errors |
 | **Title and VO** | | |

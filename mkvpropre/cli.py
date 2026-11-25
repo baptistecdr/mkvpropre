@@ -41,6 +41,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
+from . import __version__
 from .apply import process
 from .config import LANGS, Config
 from .lookup import FileInfo, Lookup, filebot_available
@@ -76,6 +77,7 @@ def parse_args(argv: list[str] | None, defaults: Config) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="mkvpropre", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", type=Path, metavar="FILE_OR_DIR")
+    ap.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     ap.add_argument("--dry-run", action="store_true", help="show what would be done, change nothing")
 
     t = ap.add_argument_group("title and VO (FileBot)")
