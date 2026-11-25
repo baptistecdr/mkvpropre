@@ -1,20 +1,53 @@
+<h3 align="center">mkvpropre</h3>
+<p align="center">
+    mkvpropre cleans up your MKV movies and series, losslessly: VO first, consistent track names, languages and flags,
+    titles from TheMovieDB, and a tidy Plex / Jellyfin library.
+    <br>
+    <a href="https://github.com/baptistecdr/mkvpropre/issues/new">Report bug</a>
+    ·
+    <a href="https://github.com/baptistecdr/mkvpropre/issues/new">Request feature</a>
+</p>
+
+<div align="center">
+
+![GitHub Tag](https://img.shields.io/github/v/tag/baptistecdr/mkvpropre?label=Latest%20version)
+
+</div>
+
+## Quick start
+
+Install [MKVToolNix](https://mkvtoolnix.download/) and [FileBot](https://www.filebot.net/), then mkvpropre (Python
+3.11+):
+
+```bash
+# macOS
+brew install mkvtoolnix
+brew install --cask filebot
+
+# Debian / Ubuntu (FileBot: see https://www.filebot.net/linux/)
+sudo apt install mkvtoolnix
+
 # mkvpropre
+uv tool install git+https://github.com/baptistecdr/mkvpropre    # or: pipx install git+https://…
+```
 
-Normalize MKV episodes and movies so every file looks the same in your player:
-track order, track names, languages, default/forced/original/SDH flags, file
-title. Attachments and tags are removed.
+Always start with a dry run: it prints what would be done (track decisions, reordering, the exact `mkvpropedit`
+commands) without changing anything. Then run it for real:
 
-Everything is lossless: tracks are only reordered (a `mkvmerge` remux, no
-re-encoding), all other changes are made in place with `mkvpropedit`. A file
-that is already normalized is not touched at all.
+```bash
+mkvpropre --dry-run "/media/raid/downloads/My Wife And Kids.2001.INTEGRALE.MULTI.1080p.WEB.H265-FTMVHD"
+mkvpropre "/media/raid/downloads/My Wife And Kids.2001.INTEGRALE.MULTI.1080p.WEB.H265-FTMVHD"
+```
 
-*mkvpropre*: `mkvpropedit`, the tool doing most of the work, meets the French
-*propre* ("clean"), which is how your files come out.
+Everything is lossless: tracks are only reordered (a `mkvmerge` remux, no re-encoding), all other changes are made in
+place with `mkvpropedit`, and a file that is already clean is not touched at all.
+
+*mkvpropre*: `mkvpropedit`, the tool doing most of the work, meets the French *propre* ("clean"), which is how your
+files come out.
 
 ## Result
 
-The VO (original language) always comes first. For a series or a movie in
-English:
+The VO (original language) always comes first. For a series or a movie in English:
 
 | # | Track | Name | Flags |
 |---|---|---|---|
@@ -27,9 +60,8 @@ English:
 | 7 | Subtitles French forced | `Français (forcés)` | forced |
 | … | any other track | unchanged | never default, moved to the end |
 
-For a French movie or series, French comes first instead, and since full French
-subtitles would only repeat the dialogue, the default subtitle track is the
-French **forced** one (or none if there is no forced track):
+For a French movie or series, French comes first instead, and since full French subtitles would only repeat the
+dialogue, the default subtitle track is the French **forced** one (or none if there is no forced track):
 
 | # | Track | Name | Flags |
 |---|---|---|---|
@@ -40,109 +72,38 @@ French **forced** one (or none if there is no forced track):
 | 5 | Subtitles French forced | `Français (forcés)` | **default**, forced |
 | 6 | Subtitles English | `Anglais` | |
 
-On every track, the language is set both as a legacy code (`eng`, `fre`) and an
-IETF tag (`en`, `fr`), and unused flags (forced, commentary, visual / hearing
-impaired) are explicitly cleared. The video track gets the VO language.
+On every track, the language is set both as a legacy code (`eng`, `fre`) and an IETF tag (`en`, `fr`), and unused
+flags (forced, commentary, visual / hearing impaired) are explicitly cleared. The video track gets the VO language.
+Attachments and tags are removed.
 
-The file title and the video track name are set to the episode or movie title,
-fetched from TheMovieDB through FileBot (in French by default).
-
-## Requirements
-
-- Python 3.11+
-- [MKVToolNix](https://mkvtoolnix.download/): `mkvmerge`, `mkvextract`, `mkvpropedit`
-- [FileBot](https://www.filebot.net/) for titles and VO detection (optional
-  with `--no-filebot`). Only `filebot -list` is used, which works without a
-  FileBot licence and never touches your files.
-
-```bash
-brew install mkvtoolnix
-brew install --cask filebot
-```
-
-## Installation
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e .
-```
-
-This installs the `mkvpropre` command in `.venv/bin/`. It can also be run
-as `python -m mkvpropre`.
+The file title and the video track name are set to the episode or movie title, fetched from TheMovieDB through FileBot
+(in French by default).
 
 ## Usage
 
-Always start with a dry run: it prints what would be done (track decisions,
-reordering, the exact `mkvpropedit` commands) without changing anything.
-
-```bash
-.venv/bin/mkvpropre --dry-run "/Volumes/Media/Series/My Wife And Kids"
-```
-
-Then apply it:
-
-```bash
-.venv/bin/mkvpropre "/Volumes/Media/Series/My Wife And Kids"
-```
-
-Folders are scanned recursively for `*.mkv` (hidden files such as macOS `._*`
-are skipped). Files and folders can be mixed, and episodes and movies can be
-processed in the same run.
-
-### Examples
+Folders are scanned recursively for `*.mkv` (hidden files such as macOS `._*` and symlinks are skipped). Files and
+folders can be mixed, and episodes and movies can be processed in the same run.
 
 ```bash
 # A whole movie folder
-.venv/bin/mkvpropre /Volumes/Media/Movies
+mkvpropre /media/raid/downloads/movies
 
 # The file name is ambiguous: tell FileBot which show / movie it is
-.venv/bin/mkvpropre --show "My Wife and Kids (2001)" "Season 1/"
-.venv/bin/mkvpropre --movie "Dune (1984)" "Dune.mkv"
+mkvpropre --show "My Wife and Kids (2001)" "Season 1/"
+mkvpropre --movie "Dune (1984)" "Dune.mkv"
 
 # English titles, from TheTVDB
-.venv/bin/mkvpropre --titles-lang en --titles-db TheTVDB "My Wife And Kids/"
+mkvpropre --titles-lang en --titles-db TheTVDB "My Wife And Kids/"
 
 # No FileBot: titles left as they are, VO given by hand
-.venv/bin/mkvpropre --no-filebot --original fr "Le Prénom.mkv"
+mkvpropre --no-filebot --original fr "Le Prénom.mkv"
 
 # Only print warnings, errors and the summary
-.venv/bin/mkvpropre -q /Volumes/Media
+mkvpropre -q /media/raid/downloads
 
 # Normalize a download, then move it to the library
-.venv/bin/mkvpropre --library /media/raid/cinemas "/media/raid/downloads/Amelie.2001.MULTI.1080p.BluRay.x264-GROUP"
+mkvpropre --library /media/raid/cinemas "/media/raid/downloads/Amelie.2001.MULTI.1080p.BluRay.x264-GROUP"
 ```
-
-### Moving to a library
-
-With `--library DIR`, each file that was normalized successfully is moved into
-`DIR/movies` or `DIR/tvshows`, renamed with **English** names following the
-Plex / Jellyfin conventions (the MKV title itself stays in `--titles-lang`):
-
-```
-/media/raid/cinemas/
-├── movies/
-│   ├── Amélie (2001).mkv
-│   ├── Mission - Impossible - Fallout (2018).mkv      ← "Mission: Impossible", ":" is not allowed
-│   └── Star Wars/                                      ← sagas (TheMovieDB collections) get a folder
-│       ├── Star Wars (1977).mkv
-│       └── The Empire Strikes Back (1980).mkv
-└── tvshows/
-    └── My Wife and Kids (2001)/
-        └── Season 01/
-            ├── My Wife and Kids (2001) - S01E01 - Pilot.mkv
-            └── My Wife and Kids (2001) - S01E02 - The Truth Hurts.mkv
-```
-
-- English names come from a second FileBot query by TheMovieDB id, so they
-  always match the same movie / show as the French title.
-- Only files that went through without error are moved; the others stay in
-  the download folder and are listed in the summary.
-- An existing file in the library is never overwritten (the file is left
-  where it is and reported).
-- On the same file system the move is an instant rename; across file systems
-  the file is copied, checked, then the original is deleted.
-- `--dry-run` shows the destination of each file.
-- Specials (season 0) go to a `Specials` folder.
 
 ### Options
 
@@ -175,86 +136,108 @@ Plex / Jellyfin conventions (the MKV title itself stays in `--titles-lang`):
 | `1` | Some files were skipped or not moved (see the summary) |
 | `2` | MKVToolNix or FileBot is missing, or bad arguments |
 
+## Moving to a library
+
+With `--library DIR`, each file that was normalized successfully is moved into `DIR/movies` or `DIR/tvshows`, renamed
+with **English** names following the Plex / Jellyfin conventions (the MKV title itself stays in `--titles-lang`):
+
+```
+/media/raid/cinemas/
+├── movies/
+│   ├── Amélie (2001).mkv
+│   ├── Mission - Impossible/                           ← sagas (TheMovieDB collections) get a folder
+│   │   └── Mission - Impossible - Fallout (2018).mkv   ← "Mission: Impossible", ":" is not allowed
+│   └── Star Wars/
+│       ├── Star Wars (1977).mkv
+│       └── The Empire Strikes Back (1980).mkv
+└── tvshows/
+    └── My Wife and Kids (2001)/
+        └── Season 01/
+            ├── My Wife and Kids (2001) - S01E01 - Pilot.mkv
+            └── My Wife and Kids (2001) - S01E02 - The Truth Hurts.mkv
+```
+
+- English names come from a second FileBot query by TheMovieDB id, so they always match the same movie / show as the
+  French title.
+- Only files that went through without error are moved; the others stay in the download folder and are listed in the
+  summary.
+- An existing file in the library is never overwritten (the file is left where it is and reported).
+- On the same file system the move is an instant rename; across file systems the file is copied, checked, then the
+  original is deleted.
+- `--dry-run` shows the destination of each file.
+- Specials (season 0) go to a `Specials` folder.
+
 ## How it works
 
 ### Identifying tracks
 
-- **Language**: from the track's language tag (`eng`, `fre`, `fra`, `fr-CA`…);
-  when it is missing or `und`, from the track name (`EN`, `VO`, `FR`, `VFF`,
-  `VFQ`, `VOSTFR`, `TRUEFRENCH`…).
+- **Language**: from the track's language tag (`eng`, `fre`, `fra`, `fr-CA`…); when it is missing or `und`, from the
+  track name (`EN`, `VO`, `FR`, `VFF`, `VFQ`, `VOSTFR`, `TRUEFRENCH`…).
 - **Commentary** audio tracks (flag or name) are not treated as main audio.
-- **Forced and SDH subtitles** are detected from their **content**, not their
-  (often wrong) names and flags:
-  - *forced*: very few events compared with the other subtitle track of the
-    same language, or fewer than 2 per minute when it is alone;
-  - *SDH*: at least 2 % of the events contain sound descriptions (`[MUSIC]`,
-    `(laughs)`, `(rires)`), music notes (`♪`) or speaker labels (`MICHAEL:`).
-    Regular subtitles score about 0 %, while some SDH tracks have only a
-    few sound cues per episode (3 % on a real series).
+- **Forced and SDH subtitles** are detected from their **content**, not their (often wrong) names and flags:
+  - *forced*: very few events compared with the other subtitle track of the same language, or fewer than 2 per minute
+    when it is alone;
+  - *SDH*: at least 2 % of the events contain sound descriptions (`[MUSIC]`, `(laughs)`, `(rires)`), music notes
+    (`♪`) or speaker labels (`MICHAEL:`). Regular subtitles score about 0 %, while some SDH tracks have only a few
+    sound cues per episode (3 % on a real series).
 
-  Text subtitles (SRT, ASS/SSA, WebVTT) are extracted to analyse them. Image
-  subtitles (PGS, VobSub) only get the forced check (from the number of
-  events); for SDH, their flags and names are used. The dry run prints each
-  verdict with the numbers behind it, and says when it disagrees with the
-  existing flags.
+  Text subtitles (SRT, ASS/SSA, WebVTT) are extracted to analyse them. Image subtitles (PGS, VobSub) only get the
+  forced check (from the number of events); for SDH, their flags and names are used. The dry run prints each verdict
+  with the numbers behind it, and says when it disagrees with the existing flags.
 
 ### Title and VO (FileBot)
 
-- **Episodes** (file name contains `SxxEyy`): the show name is the part of the
-  file name before `SxxEyy` (release-group tags like `[Group]` removed), or the
-  nearest folder that is not a season folder (`Season 1`, `Saison 02`, `S01`).
-  The episode list is fetched once per show.
-- **Movies** (no `SxxEyy`): the name and year are taken from the file name, up
-  to the first release tag (`1080p`, `MULTI`, `BluRay`, `x264`…). A year in the
-  title itself is kept: `Blade.Runner.2049.2017.mkv` → *Blade Runner 2049*
-  (2017). A warning is printed when the file has no year, or when FileBot's
-  match has a different year.
+Only `filebot -list` is used: it needs no FileBot licence and never touches your files.
+
+- **Episodes** (file name contains `SxxEyy`): the show name is the part of the file name before `SxxEyy`
+  (release-group tags like `[Group]` removed), or the nearest folder that is not a season folder (`Season 1`,
+  `Saison 02`, `S01`). The episode list is fetched once per show.
+- **Movies** (no `SxxEyy`): the name and year are taken from the file name, up to the first release tag (`1080p`,
+  `MULTI`, `BluRay`, `x264`…). A year in the title itself is kept: `Blade.Runner.2049.2017.mkv` → *Blade Runner 2049*
+  (2017). A warning is printed when the file has no year, or when FileBot's match has a different year.
 - The VO is FileBot's *original language* of the series or movie.
 
 ### Ambiguous files are skipped, not guessed
 
-A file is skipped (and listed in the summary) when the script can't safely
-decide, for example two French main audio tracks (VFF + VFQ), or two French
-full subtitle tracks. Nothing is changed in that file.
+A file is skipped (and listed in the summary) when mkvpropre can't safely decide, for example two French main audio
+tracks (VFF + VFQ), or two French full subtitle tracks. Nothing is changed in that file.
 
 ### Safety
 
-- The remux writes to a temporary file next to the original, which is only
-  replaced once `mkvmerge` has succeeded; the temporary file is always cleaned
-  up.
-- MKVToolNix warnings (exit code 1) are shown but don't stop the file; errors
-  (exit code 2) skip it.
-- Running the script twice changes nothing the second time, and doesn't even
-  touch the files' modification dates.
+- The remux writes to a new temporary file with an unpredictable name next to the original, which is only replaced once
+  `mkvmerge` has succeeded; the temporary file is always cleaned up.
+- Download names are treated as untrusted: paths are always passed as absolute paths (a file named `-o.mkv` can't be
+  read as an option), symlinks found in a folder are skipped, and names from TheMovieDB can't escape the library.
+- MKVToolNix warnings (exit code 1) are shown but don't stop the file; errors (exit code 2) skip it.
+- Running mkvpropre twice changes nothing the second time, and doesn't even touch the files' modification dates.
 
-## Limitations
+### Limitations
 
-- Only **English** and **French** are handled as main languages. Tracks in
-  other languages are kept, at the end, never default. If the VO is another
-  language (e.g. Japanese), no track gets the *original* flag, the default
-  audio falls back to English and the video language is left as it is.
-- **Attachments are always removed**, fonts included: ASS/SSA subtitles that
-  rely on embedded fonts will fall back to default fonts (a warning is printed).
+- Only **English** and **French** are handled as main languages. Tracks in other languages are kept, at the end, never
+  default. If the VO is another language (e.g. Japanese), no track gets the *original* flag, the default audio falls
+  back to English and the video language is left as it is.
+- **Attachments are always removed**, fonts included: ASS/SSA subtitles that rely on embedded fonts will fall back to
+  default fonts (a warning is printed).
 - `--movie` applies to every movie file of the run: use it on one movie at a time.
 
 ## Development
 
 ```bash
+git clone https://github.com/baptistecdr/mkvpropre && cd mkvpropre
+python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m pytest
 ```
 
-The integration tests build small MKV files with `mkvmerge` and are skipped
-when MKVToolNix is not installed. FileBot is never called by the tests (a fake
-`filebot` script is used).
-
-### Project layout
+The integration tests build small MKV files with `mkvmerge` and are skipped when MKVToolNix is not installed. FileBot is
+never called by the tests (a fake `filebot` script is used).
 
 ```
 mkvpropre/
   config.py      languages, defaults, thresholds
   model.py       Track, MediaFile… (what a file contains)
   tools.py       running MKVToolNix
+  files.py       safe file operations (temp files, no-overwrite moves)
   subtitles.py   subtitle parsing and per-codec analysers
   probe.py       file -> MediaFile
   plan.py        MediaFile -> Plan (pure logic, no I/O)
@@ -265,6 +248,23 @@ mkvpropre/
 tests/           pytest suite
 ```
 
-Per file, the pipeline is **probe → plan → apply**: `plan.py` decides the
-target state of every track without touching anything, and `apply.py` only
-sends `mkvpropedit` the properties that actually differ.
+Per file, the pipeline is **probe → plan → apply**: `plan.py` decides the target state of every track without touching
+anything, and `apply.py` only sends `mkvpropedit` the properties that actually differ.
+
+To release, bump `__version__` in `mkvpropre/__init__.py`, then push a matching tag (`git tag -a v0.2.0 && git push
+origin v0.2.0`): the release workflow tests, builds and publishes the GitHub release.
+
+## Bugs and feature requests
+
+Have a bug or a feature request? Please first search for existing and closed issues. If your problem or idea is not
+addressed yet, [please open a new issue](https://github.com/baptistecdr/mkvpropre/issues/new).
+
+## Contributing
+
+Contributions are welcome!
+
+## Thanks to
+
+- [MKVToolNix](https://mkvtoolnix.download/)
+- [FileBot](https://www.filebot.net/)
+- [TheMovieDB](https://www.themoviedb.org/)

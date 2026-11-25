@@ -60,11 +60,24 @@ log = logging.getLogger(__name__)
 
 
 def find_files(paths: list[Path]) -> list[Path]:
+    """MKV files to process, as absolute paths.
+
+    Absolute, so a download named "-o.mkv" can never be read as an option by
+    the tools. Symlinks found while scanning a folder are skipped: download
+    names are chosen by whoever made the release, and a link could point to
+    any MKV you can write. A file named explicitly is always kept.
+    """
     def wanted(p: Path) -> bool:
         # skip hidden files: macOS "._" resource forks and our own temp files
-        return not p.name.startswith(".") and not p.name.endswith(".tmp.mkv")
+        if p.name.startswith(".") or p.name.endswith(".tmp.mkv"):
+            return False
+        if p.is_symlink():
+            log.warning("   ! skipping symlink %s", p)
+            return False
+        return True
     files: list[Path] = []
     for p in paths:
+        p = p.absolute()
         if p.is_dir():
             files += sorted(f for f in p.rglob("*.mkv") if wanted(f))
         else:

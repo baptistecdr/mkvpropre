@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from .config import Config
+from .files import exclusive_temp
 from .model import remap_content
 from .plan import make_plan
 from .probe import probe, read_media
@@ -18,7 +19,7 @@ log = logging.getLogger(__name__)
 
 def remux(path: Path, order: list[int]) -> None:
     """Lossless track reorder; the original is only replaced once mkvmerge succeeded."""
-    tmp = path.with_name(f".{path.stem}.reorder.tmp.mkv")
+    tmp = exclusive_temp(path, ".reorder.tmp.mkv")
     try:
         run_tool(["mkvmerge", "-q", "-o", str(tmp),
                   "--track-order", ",".join(f"0:{i}" for i in order), str(path)])

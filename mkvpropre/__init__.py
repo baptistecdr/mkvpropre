@@ -10,6 +10,7 @@ Modules, each depending only on the ones above it:
   config     languages, defaults and thresholds
   model      Track, MediaFile, ... (what a file contains)
   tools      running MKVToolNix
+  files      safe file operations (unpredictable temp files, no-overwrite moves)
   subtitles  subtitle parsing and per-codec analysers
   probe      file -> MediaFile
   plan       MediaFile -> Plan
