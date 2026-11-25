@@ -30,6 +30,7 @@ class Config:
     default_audio: str = "en"
     default_subs: str | None = "fr"  # None: no default subtitles (forced tracks excepted, see plan)
     use_content: bool = True         # analyse subtitle content for forced/SDH
+    drop_other: bool = False         # remove tracks that aren't video / EN / FR (VO audio is always kept)
     forced_max_ratio: float = 0.25   # forced if < 25% of the fullest same-language track
     forced_max_per_min: float = 2.0  # or < 2 events per minute
     # SDH if >= 2% of events look like SDH. Regular subtitles score ~0% (112/112

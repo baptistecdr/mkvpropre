@@ -12,6 +12,7 @@ import mkvpropre.apply
 import mkvpropre.cli
 from mkvpropre.apply import remux
 from mkvpropre.cli import find_files
+from mkvpropre.model import Track
 from mkvpropre.tools import ToolError, run_tool
 
 
@@ -101,3 +102,26 @@ def test_version(flag, capsys, monkeypatch):
         mkvpropre.cli.main([flag])
     assert exit_info.value.code == 0
     assert capsys.readouterr().out.strip() == f"mkvpropre {mkvpropre.__version__}"
+
+
+def test_remux_removes_dropped_tracks(tmp_path, monkeypatch):
+    episode = tmp_path / "Show.S01E01.mkv"
+    episode.write_bytes(b"original")
+    calls = []
+
+    def mkvmerge(cmd):
+        calls.append(cmd)
+        Path(cmd[cmd.index("-o") + 1]).write_bytes(b"remuxed")
+        return ""
+
+    monkeypatch.setattr(mkvpropre.apply, "run_tool", mkvmerge)
+    dropped = (Track(3, 4, "audio", "A_AC3", {}), Track(6, 7, "subtitles", "S_TEXT/UTF8", {}),
+               Track(7, 8, "subtitles", "S_TEXT/UTF8", {}))
+    remux(episode, [0, 1, 2, 5], dropped)
+    cmd = calls[0]
+    assert cmd[cmd.index("--audio-tracks") + 1] == "!3"
+    assert cmd[cmd.index("--subtitle-tracks") + 1] == "!6,7"
+    assert "--video-tracks" not in cmd
+    assert cmd[cmd.index("--track-order") + 1] == "0:0,0:1,0:2,0:5"
+    assert cmd.index("--audio-tracks") < cmd.index(str(episode))     # options apply to the input file
+    assert {"--disable-track-statistics-tags", "--no-global-tags", "--no-track-tags"} <= set(cmd)

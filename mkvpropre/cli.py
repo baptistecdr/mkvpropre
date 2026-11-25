@@ -121,6 +121,9 @@ def parse_args(argv: list[str] | None, defaults: Config) -> argparse.Namespace:
                     help="VO, instead of FileBot's original language")
     lg.add_argument("--default-subs", choices=[*sorted(LANGS), "none"], default=defaults.default_subs,
                     help="default subtitle language (default %(default)s)")
+    lg.add_argument("--drop-other-tracks", action="store_true",
+                    help="remove every track that isn't the video or English / French audio and subtitles "
+                         "(other languages, commentaries, unknown); the VO audio is always kept")
 
     c = ap.add_argument_group("forced / SDH detection")
     c.add_argument("--no-content", action="store_true",
@@ -158,7 +161,8 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = replace(defaults, use_content=not args.no_content, forced_max_ratio=args.forced_ratio,
                   forced_max_per_min=args.forced_per_min, sdh_min_ratio=args.sdh_ratio,
-                  default_subs=None if args.default_subs == "none" else args.default_subs)
+                  default_subs=None if args.default_subs == "none" else args.default_subs,
+                  drop_other=args.drop_other_tracks)
     files = find_files(args.paths)
     lookup = Lookup(db=args.titles_db, lang=args.titles_lang, show=args.show, movie=args.movie,
                     english=args.library is not None)

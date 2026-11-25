@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import Config
 from .files import exclusive_temp
-from .model import remap_content
+from .model import Track, remap_content
 from .plan import make_plan
 from .probe import probe, read_media
 from .tools import run_tool
@@ -17,11 +17,23 @@ from .tools import run_tool
 log = logging.getLogger(__name__)
 
 
-def remux(path: Path, order: list[int]) -> None:
-    """Lossless track reorder; the original is only replaced once mkvmerge succeeded."""
+TRACK_SELECTION = {"video": "--video-tracks", "audio": "--audio-tracks", "subtitles": "--subtitle-tracks"}
+
+
+def remux(path: Path, order: list[int], dropped: tuple[Track, ...] = ()) -> None:
+    """Lossless reorder (and removal of `dropped` tracks); the original is only
+    replaced once mkvmerge succeeded."""
+    selection: list[str] = []
+    for track_type, option in TRACK_SELECTION.items():
+        ids = [str(t.id) for t in dropped if t.type == track_type]
+        if ids:
+            selection += [option, "!" + ",".join(ids)]      # "!" = every track of that type but these
     tmp = exclusive_temp(path, ".reorder.tmp.mkv")
     try:
-        run_tool(["mkvmerge", "-q", "-o", str(tmp),
+        # No tags at all: mkvpropre strips them anyway, and whether mkvmerge would copy or
+        # generate them depends on the file, which a dry run couldn't predict.
+        run_tool(["mkvmerge", "-q", "-o", str(tmp), "--disable-track-statistics-tags",
+                  "--no-global-tags", "--no-track-tags", *selection,
                   "--track-order", ",".join(f"0:{i}" for i in order), str(path)])
         os.replace(tmp, path)
     finally:
@@ -45,15 +57,18 @@ def process(path: Path, cfg: Config, title: str | None, dry: bool, source: str =
         log.warning("   ! %s", warning)
 
     changed = False
-    if plan.needs_reorder:
+    if plan.needs_remux:
         current = [t.id for t in media.tracks]
-        log.info("   reordering tracks %s -> %s (lossless remux)", current, plan.order)
+        what = "reordering"
+        if plan.dropped:
+            what += f" and removing {', '.join(f'#{t.id}' for t in plan.dropped)}"
+        log.info("   %s: tracks %s -> %s (lossless remux)", what, current, plan.order)
         if dry:
             media = media.reordered(plan.order)
         else:
-            remux(path, plan.order)
+            remux(path, plan.order, plan.dropped)
             media = replace(read_media(path), content=remap_content(media.content, plan.order))
-        plan = make_plan(media, cfg, title)   # same decisions, on the reordered layout
+        plan = make_plan(media, cfg, title)   # same decisions, on the new layout
         changed = True
 
     args = plan.propedit_args()

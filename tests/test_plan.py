@@ -97,7 +97,7 @@ def test_metadata_variant(props, expected):
 
 def test_user_file_targets(cfg, user_file):
     plan = make_plan(user_file, cfg, "Pilot")
-    assert not plan.needs_reorder
+    assert not plan.needs_remux
     video, en_audio, fr_audio, en_sub, fr_sub = plan.tracks
     assert video.target == {"flag-default": "1", "flag-forced": "0", "language": "eng",
                             "language-ietf": "en", "name": "Pilot"}
@@ -157,7 +157,7 @@ def test_reorder_to_target_layout(cfg):
         track(5, "audio", lang="ger"),
         content={0: stats(300, 0.0), 4: stats(310, 0.0)})
     plan = make_plan(m, cfg, None)
-    assert plan.needs_reorder
+    assert plan.needs_remux
     assert plan.order == [2, 3, 1, 4, 0, 5]
     assert plan.tracks[-1].kind is Kind.OTHER and plan.tracks[-1].target == {"flag-default": "0"}
     assert any("unrecognised tracks" in w for w in plan.warnings)
@@ -261,7 +261,7 @@ def test_vo_comes_first(cfg):
         ("subtitles", "fr", "Français"), ("subtitles", "fr", "Français (forcés)"),
         ("subtitles", "en", "Anglais"),
     ]
-    assert plan.needs_reorder        # the French forced track moves before the English subtitles
+    assert plan.needs_remux        # the French forced track moves before the English subtitles
 
 
 def test_english_vo_keeps_english_first(cfg, user_file):
@@ -359,8 +359,8 @@ def test_reordered_simulates_mkvmerge(cfg):
     assert r.tracks[2].props["language_ietf"] == "fr"
     assert "language_ietf" not in r.tracks[0].props or r.tracks[0].props["language_ietf"] is None
     assert r.content == {2: stats(300, 0.0)}
-    assert r.has_tags                                       # mkvmerge writes statistics tags
-    assert not make_plan(r, cfg, None).needs_reorder
+    assert not r.has_tags                                   # the remux writes no tags
+    assert not make_plan(r, cfg, None).needs_remux
 
 
 def test_plan_after_reorder_keeps_decisions(cfg):
@@ -370,3 +370,56 @@ def test_plan_after_reorder_keeps_decisions(cfg):
     first = make_plan(m, cfg, None)
     second = make_plan(m.reordered(first.order), cfg, None)
     assert [tp.target for tp in first.tracks] == [tp.target for tp in second.tracks]
+
+
+# --- --drop-other-tracks ---------------------------------------------------------------------------
+
+def mixed_file():
+    return media(track(0, "video"), track(1, "audio", lang="eng"), track(2, "audio", lang="fre"),
+                 track(3, "audio", lang="ger", name="DE"),
+                 track(4, "audio", lang="eng", name="Director's commentary"),
+                 track(5, "subtitles", lang="eng"), track(6, "subtitles", lang="spa", name="ES"),
+                 track(7, "subtitles", lang="und"),
+                 content={5: stats(400, 0.0)})
+
+
+def test_other_tracks_are_kept_by_default(cfg):
+    plan = make_plan(mixed_file(), cfg, None)
+    assert plan.dropped == () and [tp.track.id for tp in by_kind(plan, Kind.OTHER)] == [3, 4, 6, 7]
+
+
+def test_drop_other_tracks(cfg):
+    plan = make_plan(mixed_file(), replace(cfg, drop_other=True), None)
+    assert [t.id for t in plan.dropped] == [3, 4, 6, 7]
+    assert plan.order == [0, 1, 2, 5] and plan.needs_remux
+    assert by_kind(plan, Kind.OTHER) == []
+    assert any(w.startswith("removing other tracks: #3 audio ger 'DE'") for w in plan.warnings)
+
+
+def test_dropping_alone_needs_a_remux(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="eng"), track(2, "subtitles", lang="spa"))
+    plan = make_plan(m, replace(cfg, drop_other=True), None)
+    assert plan.order == [0, 1] and plan.needs_remux
+
+
+def test_vo_audio_is_never_dropped(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="jpn", ietf="ja"), track(2, "audio", lang="eng"),
+              track(3, "audio", lang="ger", ietf="de"), track(4, "subtitles", lang="jpn", ietf="ja"))
+    plan = make_plan(m, replace(cfg, drop_other=True).with_original("ja"), None)
+    assert [t.id for t in plan.dropped] == [3, 4]                 # Japanese subtitles go, Japanese audio stays
+    assert [tp.track.id for tp in by_kind(plan, Kind.OTHER)] == [1]
+    assert any("it is the VO" in w for w in plan.warnings)
+
+
+def test_audio_is_kept_when_there_is_no_main_audio(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="und"), track(2, "subtitles", lang="spa"))
+    plan = make_plan(m, replace(cfg, drop_other=True), None)
+    assert [t.id for t in plan.dropped] == [2]
+    assert any("could leave no sound" in w for w in plan.warnings)
+
+
+def test_after_dropping_the_plan_is_stable(cfg):
+    drop_cfg = replace(cfg, drop_other=True)
+    first = make_plan(mixed_file(), drop_cfg, None)
+    second = make_plan(first.media.reordered(first.order), drop_cfg, None)
+    assert second.dropped == () and not second.needs_remux

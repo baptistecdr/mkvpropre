@@ -85,8 +85,8 @@ class MediaFile:
         by_id = {t.id: t for t in self.tracks}
         tracks = tuple(replace(by_id[old], id=new, number=new + 1, props=remuxed_props(by_id[old].props))
                        for new, old in enumerate(order))
-        # mkvmerge writes statistics tags, which will then be stripped as well.
-        return replace(self, tracks=tracks, has_tags=True,
+        # The remux writes no tags at all (see apply.remux).
+        return replace(self, tracks=tracks, has_tags=False,
                        content=remap_content(self.content, order))
 
 

@@ -5,6 +5,7 @@ import logging
 import shutil
 import subprocess
 import unicodedata
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -110,3 +111,28 @@ def test_not_an_mkv(tmp_path):
     bogus.write_text("not a video")
     with pytest.raises(ToolError):
         process(bogus, Config(), None, dry=False)
+
+
+def test_drop_other_tracks_end_to_end(tmp_path, caplog):
+    en = write_srt(tmp_path / "en.srt", ["Hello there."] * 200)
+    fr = write_srt(tmp_path / "fr.srt", ["Bonjour."] * 190)
+    de = write_srt(tmp_path / "de.srt", ["Guten Tag."] * 180)
+    out = tmp_path / "media" / "Show.S01E01.mkv"
+    out.parent.mkdir()
+    subprocess.run(["mkvmerge", "-q", "-o", str(out), "--language", "0:ger", str(de),
+                    "--language", "0:eng", str(en), "--language", "0:fre", str(fr)], check=True)
+    cfg = replace(Config(), drop_other=True)
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="mkvpropre"):
+        process(out, cfg, "Pilot", True)
+    dry_log = [r.getMessage() for r in caplog.records]
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="mkvpropre"):
+        process(out, cfg, "Pilot", False)
+    assert [r.getMessage() for r in caplog.records] == dry_log
+
+    media = read_media(out)
+    assert [t.current("language") for t in media.tracks] == ["eng", "fre"]
+    assert any("removing #0" in line for line in dry_log)
+    assert list(out.parent.iterdir()) == [out]

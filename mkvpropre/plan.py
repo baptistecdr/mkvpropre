@@ -35,17 +35,19 @@ def same_text(a: str, b: str) -> bool:
 @dataclass(frozen=True)
 class Plan:
     media: MediaFile
-    tracks: tuple[TrackPlan, ...]   # in target order
+    tracks: tuple[TrackPlan, ...]   # kept tracks, in target order
     title: str | None               # wanted file title, None = leave as is
     notes: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    dropped: tuple[Track, ...] = () # tracks to remove (--drop-other-tracks)
 
     @property
     def order(self) -> list[int]:
         return [tp.track.id for tp in self.tracks]
 
     @property
-    def needs_reorder(self) -> bool:
+    def needs_remux(self) -> bool:
+        """Tracks to reorder or to remove: both need a (lossless) mkvmerge remux."""
         return self.order != [t.id for t in self.media.tracks]
 
     def propedit_args(self) -> list[str]:
@@ -157,6 +159,34 @@ def default_subtitle_variant(lang: str, groups: dict[Variant, list[Track]],
     return Variant.SDH if groups[Variant.SDH] else None
 
 
+def track_language(track: Track) -> str:
+    """Primary language subtag, e.g. "ja" for "ja-JP" (legacy 3-letter code when there is no IETF tag)."""
+    tag = track.props.get("language_ietf") or track.props.get("language") or "und"
+    return tag.lower().split("-")[0]
+
+
+def split_other(other: list[Track], has_main_audio: bool, vo: str) -> tuple[list[Track], list[Track], list[str]]:
+    """Which "other" tracks (other languages, commentary, unknown) to remove.
+
+    Returns (kept, dropped, reasons for keeping). Never removed:
+    - audio in the VO language, e.g. the Japanese audio of a Japanese film
+      (the VO isn't a configured language, so its audio is an "other" track);
+    - any audio, when the file has no English / French audio: removing it
+      could leave a file without sound (e.g. untagged "und" tracks).
+    """
+    kept, dropped, why = [], [], []
+    for t in other:
+        if t.type == "audio" and track_language(t) == vo and not COMMENTARY_NAME_RE.search(t.name):
+            kept.append(t)
+            why.append(f"kept {t.describe()}: it is the VO")
+        elif t.type == "audio" and not has_main_audio:
+            kept.append(t)
+            why.append(f"kept {t.describe()}: no English / French audio, removing it could leave no sound")
+        else:
+            dropped.append(t)
+    return kept, dropped, why
+
+
 def make_plan(media: MediaFile, cfg: Config, title: str | None) -> Plan:
     notes: list[str] = []
     warnings: list[str] = []
@@ -188,6 +218,12 @@ def make_plan(media: MediaFile, cfg: Config, title: str | None) -> Plan:
     for lang, tracks in subs.items():
         if not tracks:
             warnings.append(f"no '{lang}' subtitle track")
+    dropped: list[Track] = []
+    if cfg.drop_other:
+        other, dropped, kept_why = split_other(other, has_main_audio=any(audio.values()), vo=cfg.original)
+        warnings += kept_why
+        if dropped:
+            warnings.append("removing other tracks: " + ", ".join(t.describe() for t in dropped))
     if other:
         warnings.append("unrecognised tracks kept at the end: " + ", ".join(t.describe() for t in other))
     if title is None:
@@ -258,4 +294,4 @@ def make_plan(media: MediaFile, cfg: Config, title: str | None) -> Plan:
     for t in other:
         plans.append(TrackPlan(t, Kind.OTHER, {"flag-default": "0"}))
 
-    return Plan(media, tuple(plans), title, tuple(notes), tuple(warnings))
+    return Plan(media, tuple(plans), title, tuple(notes), tuple(warnings), tuple(dropped))

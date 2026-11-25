@@ -58,7 +58,7 @@ The VO (original language) always comes first. For a series or a movie in Englis
 | 5 | Subtitles English SDH | `Anglais (SDH)` | original, hearing impaired |
 | 6 | Subtitles French | `Français` | **default** |
 | 7 | Subtitles French forced | `Français (forcés)` | forced |
-| … | any other track | unchanged | never default, moved to the end |
+| … | any other track | unchanged | never default, moved to the end (or removed with `--drop-other-tracks`) |
 
 For a French movie or series, French comes first instead, and since full French subtitles would only repeat the
 dialogue, the default subtitle track is the French **forced** one (or none if there is no forced track):
@@ -101,6 +101,9 @@ mkvpropre --no-filebot --original fr "Le Prénom.mkv"
 # Only print warnings, errors and the summary
 mkvpropre -q /media/raid/downloads
 
+# Also remove the other languages, commentaries and unknown tracks
+mkvpropre --drop-other-tracks "/media/raid/downloads/Amelie.2001.MULTI.1080p.BluRay.x264-GROUP"
+
 # Normalize a download, then move it to the library
 mkvpropre --library /media/raid/cinema "/media/raid/downloads/Amelie.2001.MULTI.1080p.BluRay.x264-GROUP"
 ```
@@ -122,6 +125,7 @@ mkvpropre --library /media/raid/cinema "/media/raid/downloads/Amelie.2001.MULTI.
 | **Languages** | | |
 | `--original {en,fr}` | from FileBot | Force the VO |
 | `--default-subs {en,fr,none}` | `fr` | Default subtitle language |
+| `--drop-other-tracks` | | Remove every track that isn't the video or English / French audio and subtitles (other languages, commentaries, unknown); the VO audio is always kept |
 | **Forced / SDH detection** | | |
 | `--no-content` | | Use only existing flags and track names |
 | `--forced-ratio R` | `0.25` | Forced if it has fewer than R × the events of the fullest track of the same language |
@@ -196,6 +200,18 @@ Only `filebot -list` is used: it needs no FileBot licence and never touches your
   `MULTI`, `BluRay`, `x264`…). A year in the title itself is kept: `Blade.Runner.2049.2017.mkv` → *Blade Runner 2049*
   (2017). A warning is printed when the file has no year, or when FileBot's match has a different year.
 - The VO is FileBot's *original language* of the series or movie.
+
+### Removing other tracks
+
+With `--drop-other-tracks`, every track that isn't the video or English / French audio and subtitles is removed
+(in the same lossless remux as the reordering): other languages, commentaries, tracks with an unknown language.
+Two kinds of track are always kept, with a warning:
+
+- the audio in the VO language, e.g. the Japanese audio of a Japanese film (the VO isn't English or French, so its
+  audio counts as an "other" track);
+- any audio when the file has no English / French audio, so a file with untagged audio never loses its sound.
+
+The dry run lists the tracks that would be removed.
 
 ### Ambiguous files are skipped, not guessed
 
