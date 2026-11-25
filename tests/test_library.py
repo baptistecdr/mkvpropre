@@ -11,7 +11,7 @@ import mkvpropre.library
 from mkvpropre.library import LibraryError, library_path, move_to_library, safe_name, saga_folder
 from mkvpropre.lookup import Naming
 
-ROOT = Path("/media/raid/cinemas")
+ROOT = Path("/media/raid/cinema")
 
 
 # --- names -----------------------------------------------------------------------------------
@@ -70,14 +70,14 @@ def download(tmp_path) -> Path:
 
 
 def test_move_creates_folders(tmp_path, download):
-    dest = tmp_path / "cinemas" / "movies" / "Star Wars" / "Star Wars (1977).mkv"
+    dest = tmp_path / "cinema" / "movies" / "Star Wars" / "Star Wars (1977).mkv"
     assert move_to_library(download, dest, dry=False) is True
     assert dest.read_bytes() == b"movie data" and not download.exists()
 
 
 def test_move_across_file_systems_copies_then_deletes(tmp_path, download, monkeypatch):
     monkeypatch.setattr(mkvpropre.library, "same_file_system", lambda a, b: False)
-    dest = tmp_path / "cinemas" / "movies" / "Amélie (2001).mkv"
+    dest = tmp_path / "cinema" / "movies" / "Amélie (2001).mkv"
     move_to_library(download, dest, dry=False)
     assert dest.read_bytes() == b"movie data" and not download.exists()
     assert [p.name for p in dest.parent.iterdir()] == ["Amélie (2001).mkv"]     # no .part left
@@ -91,7 +91,7 @@ def test_failed_copy_keeps_the_original(tmp_path, download, monkeypatch):
         raise OSError("No space left on device")
 
     monkeypatch.setattr(mkvpropre.library.shutil, "copy2", broken_copy)
-    dest = tmp_path / "cinemas" / "movies" / "Amélie (2001).mkv"
+    dest = tmp_path / "cinema" / "movies" / "Amélie (2001).mkv"
     with pytest.raises(OSError, match="No space"):
         move_to_library(download, dest, dry=False)
     assert download.read_bytes() == b"movie data"
@@ -99,7 +99,7 @@ def test_failed_copy_keeps_the_original(tmp_path, download, monkeypatch):
 
 
 def test_never_overwrites(tmp_path, download):
-    dest = tmp_path / "cinemas" / "movies" / "Amélie (2001).mkv"
+    dest = tmp_path / "cinema" / "movies" / "Amélie (2001).mkv"
     dest.parent.mkdir(parents=True)
     dest.write_bytes(b"already there")
     with pytest.raises(LibraryError, match="already exists"):
@@ -108,7 +108,7 @@ def test_never_overwrites(tmp_path, download):
 
 
 def test_dry_run_moves_nothing(tmp_path, download, caplog):
-    dest = tmp_path / "cinemas" / "movies" / "Amélie (2001).mkv"
+    dest = tmp_path / "cinema" / "movies" / "Amélie (2001).mkv"
     with caplog.at_level(logging.INFO):
         move_to_library(download, dest, dry=True)
     assert download.exists() and not dest.parent.exists()

@@ -102,7 +102,7 @@ mkvpropre --no-filebot --original fr "Le Prénom.mkv"
 mkvpropre -q /media/raid/downloads
 
 # Normalize a download, then move it to the library
-mkvpropre --library /media/raid/cinemas "/media/raid/downloads/Amelie.2001.MULTI.1080p.BluRay.x264-GROUP"
+mkvpropre --library /media/raid/cinema "/media/raid/downloads/Amelie.2001.MULTI.1080p.BluRay.x264-GROUP"
 ```
 
 ### Options
@@ -142,7 +142,7 @@ With `--library DIR`, each file that was normalized successfully is moved into `
 with **English** names following the Plex / Jellyfin conventions (the MKV title itself stays in `--titles-lang`):
 
 ```
-/media/raid/cinemas/
+/media/raid/cinema/
 ├── movies/
 │   ├── Amélie (2001).mkv
 │   ├── Mission - Impossible/                           ← sagas (TheMovieDB collections) get a folder

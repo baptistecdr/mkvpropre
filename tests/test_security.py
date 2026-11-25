@@ -94,7 +94,7 @@ def test_destination_appearing_after_the_check_is_not_overwritten(tmp_path, monk
     src = tmp_path / "downloads" / "Amelie.2001.mkv"
     src.parent.mkdir()
     src.write_bytes(b"download")
-    dest = tmp_path / "cinemas" / "movies" / "Amélie (2001).mkv"
+    dest = tmp_path / "cinema" / "movies" / "Amélie (2001).mkv"
 
     def race(a, b):                       # another process creates dest right after our exists() check
         dest.write_bytes(b"theirs")
@@ -111,7 +111,7 @@ def test_cross_device_copy_uses_an_unpredictable_part_file(tmp_path, monkeypatch
     src = tmp_path / "downloads" / "Amelie.2001.mkv"
     src.parent.mkdir()
     src.write_bytes(b"download")
-    dest = tmp_path / "cinemas" / "movies" / "Amélie (2001).mkv"
+    dest = tmp_path / "cinema" / "movies" / "Amélie (2001).mkv"
     dest.parent.mkdir(parents=True)
     (dest.parent / f".{dest.name}.part").symlink_to(tmp_path / "victim")    # old, predictable name
     move_to_library(src, dest, dry=False)
