@@ -32,7 +32,9 @@ class Config:
     use_content: bool = True         # analyse subtitle content for forced/SDH
     forced_max_ratio: float = 0.25   # forced if < 25% of the fullest same-language track
     forced_max_per_min: float = 2.0  # or < 2 events per minute
-    sdh_min_ratio: float = 0.07      # SDH if >= 7% of events look like SDH
+    # SDH if >= 2% of events look like SDH. Regular subtitles score ~0% (112/112
+    # French tracks of a real series), light SDH tracks as little as 3%.
+    sdh_min_ratio: float = 0.02
 
     def with_original(self, lang: str) -> Config:
         """VO = `lang`: it gets the "original" flag and becomes the default audio.

@@ -50,15 +50,21 @@ def test_no_duration_only_relative_check(cfg):
 
 def test_sdh_threshold(cfg):
     a, b = track(3, "subtitles"), track(4, "subtitles")
-    m = media(a, b, content={3: stats(200, 0.069), 4: stats(220, 0.07)})
+    m = media(a, b, content={3: stats(200, 0.019), 4: stats(220, 0.02)})
     v = content_verdicts([a, b], m, cfg)
     assert v[3].sdh is False and v[4].sdh is True
+
+
+def test_light_sdh_track_is_sdh(cfg):
+    # Real case: My Wife and Kids S01E02, English SDH with only a few "(sighs)", "♪ Whoo ♪"
+    t = track(3, "subtitles")
+    assert content_verdicts([t], media(t, content={3: stats(380, 0.034)}), cfg)[3].sdh is True
 
 
 def test_thresholds_come_from_config(cfg):
     t = track(3, "subtitles")
     m = media(t, content={3: stats(200, 0.05)})
-    assert content_verdicts([t], m, replace(cfg, sdh_min_ratio=0.04))[3].sdh is True
+    assert content_verdicts([t], m, replace(cfg, sdh_min_ratio=0.06))[3].sdh is False
 
 
 @pytest.mark.parametrize("forced, sdh, meta, expected, source", [

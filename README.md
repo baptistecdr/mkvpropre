@@ -165,7 +165,7 @@ Plex / Jellyfin conventions (the MKV title itself stays in `--titles-lang`):
 | `--no-content` | | Use only existing flags and track names |
 | `--forced-ratio R` | `0.25` | Forced if it has fewer than R × the events of the fullest track of the same language |
 | `--forced-per-min N` | `2.0` | Forced if it has fewer than N events per minute |
-| `--sdh-ratio R` | `0.07` | SDH if at least R of its events look like SDH |
+| `--sdh-ratio R` | `0.02` | SDH if at least R of its events look like SDH |
 
 ### Exit codes
 
@@ -187,8 +187,10 @@ Plex / Jellyfin conventions (the MKV title itself stays in `--titles-lang`):
   (often wrong) names and flags:
   - *forced*: very few events compared with the other subtitle track of the
     same language, or fewer than 2 per minute when it is alone;
-  - *SDH*: at least 7 % of the events contain sound descriptions (`[MUSIC]`,
+  - *SDH*: at least 2 % of the events contain sound descriptions (`[MUSIC]`,
     `(laughs)`, `(rires)`), music notes (`♪`) or speaker labels (`MICHAEL:`).
+    Regular subtitles score about 0 %, while some SDH tracks have only a
+    few sound cues per episode (3 % on a real series).
 
   Text subtitles (SRT, ASS/SSA, WebVTT) are extracted to analyse them. Image
   subtitles (PGS, VobSub) only get the forced check (from the number of
