@@ -113,6 +113,7 @@ mkvpropre --library /media/raid/cinema "/media/raid/downloads/Amelie.2001.MULTI.
 | Option | Default | Description |
 |---|---|---|
 | `-V`, `--version` | | Print the installed version and exit |
+| `--completion {bash,zsh,fish}` | | Print the shell completion script and exit (see [Shell completion](#shell-completion)) |
 | `--dry-run` | | Show what would be done, change nothing |
 | `--library DIR` | | Move normalized files to `DIR/movies` or `DIR/tvshows`, with English names |
 | `-q`, `--quiet` | | Only print warnings and errors |
@@ -139,6 +140,25 @@ mkvpropre --library /media/raid/cinema "/media/raid/downloads/Amelie.2001.MULTI.
 | `0` | All files normalized (or already were) |
 | `1` | Some files were skipped or not moved (see the summary) |
 | `2` | MKVToolNix or FileBot is missing, or bad arguments |
+
+### Shell completion
+
+mkvpropre prints its own completion script for bash, zsh and fish: options with their descriptions, the values of
+`--original`, `--default-subs` and `--titles-db`, folders after `--library`, and `.mkv` files and folders for the paths.
+
+```bash
+# zsh: in ~/.zshrc, after compinit
+eval "$(mkvpropre --completion zsh)"
+
+# bash: in ~/.bashrc
+eval "$(mkvpropre --completion bash)"
+
+# fish
+mkvpropre --completion fish > ~/.config/fish/completions/mkvpropre.fish
+```
+
+The script is generated from mkvpropre's options, so new options are completed after an update; regenerate the fish
+file after updating.
 
 ## Moving to a library
 
@@ -275,6 +295,7 @@ mkvpropre/
   apply.py       Plan -> changes on disk
   lookup.py      title, VO and English names with FileBot
   library.py     library paths and safe moves (--library)
+  completion.py  shell completion scripts (--completion)
   cli.py         command line
 tests/           pytest suite
 ```

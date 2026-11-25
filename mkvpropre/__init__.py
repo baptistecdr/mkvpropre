@@ -17,6 +17,7 @@ Modules, each depending only on the ones above it:
   apply      Plan -> changes on disk
   lookup     title, VO and English names of episodes and movies, with FileBot
   library    library paths and safe moves (--library)
+  completion shell completion scripts (--completion)
   cli        command line
 """
 

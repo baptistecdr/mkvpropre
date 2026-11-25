@@ -48,8 +48,9 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from . import __version__
+from . import __version__, completion
 from .apply import process
+from .completion import CompletionAction
 from .config import LANGS, Config
 from .library import LibraryError, library_path, move_to_library
 from .lookup import FileInfo, Lookup, filebot_available
@@ -94,24 +95,28 @@ def file_config(cfg: Config, info: FileInfo, original: str | None) -> tuple[Conf
     return cfg, info.source or "no FileBot match"
 
 
-def parse_args(argv: list[str] | None, defaults: Config) -> argparse.Namespace:
+def build_parser(defaults: Config) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="mkvpropre", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", type=Path, metavar="FILE_OR_DIR")
     ap.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
+    ap.add_argument("--completion", action=CompletionAction,
+                    help="print the completion script for bash, zsh or fish and exit")
     ap.add_argument("--dry-run", action="store_true", help="show what would be done, change nothing")
-    ap.add_argument("--library", type=Path, metavar="DIR",
-                    help="move normalized files to DIR/movies or DIR/tvshows, with English "
-                         "Plex/Jellyfin names (needs FileBot)")
+    library = ap.add_argument("--library", type=Path, metavar="DIR",
+                              help="move normalized files to DIR/movies or DIR/tvshows, with English "
+                                   "Plex/Jellyfin names (needs FileBot)")
+    library.completion = completion.DIRS
 
     t = ap.add_argument_group("title and VO (FileBot)")
     t.add_argument("--show", help='series name for FileBot, e.g. "My Wife and Kids (2001)" '
                                   "(default: from the file or folder names)")
     t.add_argument("--movie", help='movie for FileBot, e.g. "Amélie (2001)" (default: from the file name; '
                                    "applies to every movie file given)")
-    t.add_argument("--titles-db", default="TheMovieDB::TV",
-                   help="series database: TheMovieDB::TV, TheTVDB, TVmaze, ... (default %(default)s); "
-                        "movies always use TheMovieDB")
+    titles_db = t.add_argument("--titles-db", default="TheMovieDB::TV",
+                               help="series database: TheMovieDB::TV, TheTVDB, TVmaze, ... (default %(default)s); "
+                                    "movies always use TheMovieDB")
+    titles_db.completion = ["TheMovieDB::TV", "TheTVDB", "TVmaze"]
     t.add_argument("--titles-lang", default="fr", help="title language (default %(default)s)")
     t.add_argument("--no-filebot", action="store_true",
                    help="don't use FileBot: titles left as is, VO from --original (default en)")
@@ -136,7 +141,11 @@ def parse_args(argv: list[str] | None, defaults: Config) -> argparse.Namespace:
     c.add_argument("--sdh-ratio", type=float, default=defaults.sdh_min_ratio,
                    help=f"SDH if at least this share of events look like SDH (default {defaults.sdh_min_ratio})")
     ap.add_argument("-q", "--quiet", action="store_true", help="only print warnings and errors")
-    return ap.parse_args(argv)
+    return ap
+
+
+def parse_args(argv: list[str] | None, defaults: Config) -> argparse.Namespace:
+    return build_parser(defaults).parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
