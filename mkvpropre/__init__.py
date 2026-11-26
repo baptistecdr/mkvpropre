@@ -21,4 +21,4 @@ Modules, each depending only on the ones above it:
   cli        command line
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
