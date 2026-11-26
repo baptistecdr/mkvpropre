@@ -326,13 +326,13 @@ def test_cli_requires_filebot_unless_disabled(tmp_path, monkeypatch):
     assert mkvpropre.cli.main(["--no-filebot", str(tmp_path)]) == 0     # empty folder
 
 
-@pytest.mark.parametrize("info, original, expected_vo, expected_audio", [
-    (FileInfo("Amélie", "fr", "movie"), None, "fr", "fr"),     # FileBot's VO
-    (FileInfo("Dune", "en", "movie"), None, "en", "en"),
-    (FileInfo("Amélie", "fr", "movie"), "en", "en", "en"),     # --original wins
-    (FileInfo("Chihiro", "ja", "movie"), None, "ja", "en"),    # unsupported VO: default audio falls back
-    (FileInfo(), None, "en", "en"),                            # nothing known: defaults
+@pytest.mark.parametrize("info, original, expected_vo", [
+    (FileInfo("Amélie", "fr", "movie"), None, "fr"),     # FileBot's VO
+    (FileInfo("Dune", "en", "movie"), None, "en"),
+    (FileInfo("Amélie", "fr", "movie"), "en", "en"),     # --original wins
+    (FileInfo("Chihiro", "ja", "movie"), None, "ja"),
+    (FileInfo(), None, "en"),                            # nothing known: default
 ])
-def test_file_config(info, original, expected_vo, expected_audio):
+def test_file_config(info, original, expected_vo):
     cfg, _ = mkvpropre.cli.file_config(Config(), info, original)
-    assert (cfg.original, cfg.default_audio) == (expected_vo, expected_audio)
+    assert cfg.original == expected_vo

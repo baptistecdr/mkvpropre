@@ -47,34 +47,42 @@ files come out.
 
 ## Result
 
-The VO (original language) always comes first. For a series or a movie in English:
+mkvpropre keeps the tracks you want, in this order, right after the video, and puts the rest at the end:
 
 | # | Track | Name | Flags |
 |---|---|---|---|
 | 1 | Video | episode / movie title | default |
-| 2 | Audio English (VO) | `Anglais` | default, original |
-| 3 | Audio French | `Français` | |
-| 4 | Subtitles English | `Anglais` | original |
-| 5 | Subtitles English SDH | `Anglais (SDH)` | original, hearing impaired |
+| 2 | Audio VO | `Anglais` | default, original |
+| 3 | Audio French (VFF) | `Français` | |
+| 4 | Subtitles VO | `Anglais` | original |
+| 5 | Subtitles VO forced | `Anglais (forcés)` | forced, original |
 | 6 | Subtitles French | `Français` | **default** |
 | 7 | Subtitles French forced | `Français (forcés)` | forced |
-| … | any other track | unchanged | never default, moved to the end (or removed with `--drop-other-tracks`) |
+| … | the rest | renamed: `Anglais (SDH)`, `Français (VFQ)`, `Français (AD)`, `Allemand`… | never default, at the end |
 
-For a French movie or series, French comes first instead, and since full French subtitles would only repeat the
-dialogue, the default subtitle track is the French **forced** one (or none if there is no forced track):
+- Each line is filled with the best matching track: plain subtitles rather than SDH, France French (VFF) rather than
+  Québec French (VFQ) or audio description, the main audio rather than a commentary, then the most audio channels.
+  When the only French subtitles are SDH, or the only French audio is VFQ, that track is used.
+- **The rest** is every other track: SDH next to plain subtitles, VFQ, audio description, commentaries, other
+  languages. It's renamed with the same pattern, moved to the end and never default.
+  **`--drop-other-tracks` removes it.**
+- The VO is the original language from FileBot, so a Japanese film gets `Japonais` audio and subtitles first, and
+  English becomes part of the rest.
+- A film in **your native language** (French, `native` in `config.py`) only keeps its **forced** subtitles: you don't
+  need full French subtitles for a French film. Its French lines are filled once, and English is the rest:
 
 | # | Track | Name | Flags |
 |---|---|---|---|
 | 1 | Video | `Le Fabuleux Destin d'Amélie Poulain` | default |
 | 2 | Audio French (VO) | `Français` | default, original |
-| 3 | Audio English | `Anglais` | |
-| 4 | Subtitles French | `Français` | original |
-| 5 | Subtitles French forced | `Français (forcés)` | **default**, forced |
-| 6 | Subtitles English | `Anglais` | |
+| 3 | Subtitles French forced | `Français (forcés)` | **default**, forced, original |
+| … | the rest: full / SDH French subtitles, English, VFQ, AD… | renamed | never default, at the end |
 
-On every track, the language is set both as a legacy code (`eng`, `fre`) and an IETF tag (`en`, `fr`), and unused
-flags (forced, commentary, visual / hearing impaired) are explicitly cleared. The video track gets the VO language.
-Attachments and tags are removed.
+With `--drop-other-tracks`, a French film is left with the video, the French audio and the French forced subtitles.
+
+On every track, the language is set both as a legacy code (`eng`, `fre`) and an IETF tag (`en`, `fr`, `fr-CA` for
+VFQ), and the forced, original, commentary and hearing / visually impaired flags are set to match. The video track
+gets the VO language. Attachments and tags are removed.
 
 The file title and the video track name are set to the episode or movie title, fetched from TheMovieDB through FileBot
 (in French by default).
@@ -101,7 +109,7 @@ mkvpropre --no-filebot --original fr "Le Prénom.mkv"
 # Only print warnings, errors and the summary
 mkvpropre -q /media/raid/downloads
 
-# Also remove the other languages, commentaries and unknown tracks
+# Also remove the rest (SDH, VFQ, audio description, commentaries, other languages)
 mkvpropre --drop-other-tracks "/media/raid/downloads/Amelie.2001.MULTI.1080p.BluRay.x264-GROUP"
 
 # Normalize a download, then move it to the library
@@ -124,9 +132,9 @@ mkvpropre --library /media/raid/cinema "/media/raid/downloads/Amelie.2001.MULTI.
 | `--titles-lang LANG` | `fr` | Title language |
 | `--no-filebot` | | Don't use FileBot: titles left as is, VO from `--original` (default `en`) |
 | **Languages** | | |
-| `--original {en,fr}` | from FileBot | Force the VO |
-| `--default-subs {en,fr,none}` | `fr` | Default subtitle language |
-| `--drop-other-tracks` | | Remove every track that isn't the video or English / French audio and subtitles (other languages, commentaries, unknown); the VO audio is always kept |
+| `--original LANG` | from FileBot | Force the VO (`en`, `fr`, `ja`…) |
+| `--default-subs LANG` | `fr` | Default subtitle language, or `none` |
+| `--drop-other-tracks` | | Remove the rest: every track the profile doesn't want (SDH next to plain subtitles, VFQ, audio description, commentaries, other languages) |
 | **Forced / SDH detection** | | |
 | `--no-content` | | Use only existing flags and track names |
 | `--forced-ratio R` | `0.25` | Forced if it has fewer than R × the events of the fullest track of the same language |
@@ -197,7 +205,7 @@ with **English** names following the Plex / Jellyfin conventions (the MKV title 
 
 - **Language**: from the track's language tag (`eng`, `fre`, `fra`, `fr-CA`…); when it is missing or `und`, from the
   track name (`EN`, `VO`, `FR`, `VFF`, `VFQ`, `VOSTFR`, `TRUEFRENCH`…).
-- **Commentary** audio tracks (flag or name) are not treated as main audio.
+- **Commentary** audio tracks (flag or name) are only used as the main audio when there is no other one.
 - **Forced and SDH subtitles** are detected from their **content**, not their (often wrong) names and flags:
   - *forced*: very few events compared with the other subtitle track of the same language, or fewer than 2 per minute
     when it is alone;
@@ -221,37 +229,39 @@ Only `filebot -list` is used: it needs no FileBot licence and never touches your
   (2017). A warning is printed when the file has no year, or when FileBot's match has a different year.
 - The VO is FileBot's *original language* of the series or movie.
 
-### Québec French and audio description
+### What counts as SDH, VFQ, audio description, commentary
 
-Multi-language releases often carry extra French tracks next to the France French ones ("VF2", "AD" in the name):
+- **SDH** subtitles: detected from their content (see above), or the hearing-impaired flag / name when the content
+  can't tell;
+- **Québec French (VFQ)**, audio and subtitles: tagged `fr-CA`, or named `VFQ`, `CA`, `Québécois`… when the tag has
+  no region;
+- **audio description**: the visually-impaired flag, or a name such as `AD`, `Audio Description`, `malvoyants`;
+- **commentary**: the commentary flag, or "comment" in the name.
 
-- **Québec French (VFQ)**, audio and subtitles: tracks tagged `fr-CA`, or named `VFQ`, `CA`, `Québécois`… when the
-  tag has no region;
-- **audio description** (narration for the visually impaired): the visually-impaired flag, or a name such as `AD`,
-  `Audio Description`, `malvoyants`.
+### Changing what you want
 
-They are treated as other tracks: kept at the end, untouched and never default, and removed with
-`--drop-other-tracks`. The France French track stays the main one. A variant is only set aside when a France French
-track of the same kind remains, so a movie released only in VFQ, or a file whose only French audio is the audio
-description, keeps it as its French track.
+The wanted tracks are a plain list in [`mkvpropre/config.py`](mkvpropre/config.py), `PROFILE`:
 
-### Removing other tracks
+```python
+PROFILE = (
+    Slot("audio", VO),
+    Slot("audio", "fr"),
+    Slot("subtitles", VO),
+    Slot("subtitles", VO, forced=True),
+    Slot("subtitles", "fr"),
+    Slot("subtitles", "fr", forced=True),
+)
+```
 
-With `--drop-other-tracks`, every track that isn't the video or English / French audio and subtitles is removed
-(in the same lossless remux as the reordering): other languages, commentaries, tracks with an unknown language,
-Québec French and audio description.
-Two kinds of track are always kept, with a warning:
+Adding `Slot("audio", "en")` would always keep English audio too, removing the French lines would keep the VO only.
+`native = "fr"` in `Config` is the language you understand: a film in it only keeps its forced subtitles.
+Track names come from the `LANGUAGES` table in the same file.
 
-- the audio in the VO language when it has no main track, e.g. the Japanese audio of a Japanese film (the VO isn't
-  English or French, so its audio counts as an "other" track);
-- any audio when the file has no English / French audio, so a file with untagged audio never loses its sound.
+### --drop-other-tracks
 
-The dry run lists the tracks that would be removed.
-
-### Ambiguous files are skipped, not guessed
-
-A file is skipped (and listed in the summary) when mkvpropre can't safely decide, for example two France French
-audio tracks (two dubs, or 5.1 and 2.0), or two French full subtitle tracks. Nothing is changed in that file.
+Removes the rest, in the same lossless remux as the reordering. The dry run lists the tracks that would be removed.
+When no wanted audio track exists at all (e.g. untagged `und` audio), the audio tracks are kept anyway, with a
+warning, so a file never loses its sound.
 
 ### Safety
 
@@ -264,9 +274,8 @@ audio tracks (two dubs, or 5.1 and 2.0), or two French full subtitle tracks. Not
 
 ### Limitations
 
-- Only **English** and **French** are handled as main languages. Tracks in other languages are kept, at the end, never
-  default. If the VO is another language (e.g. Japanese), no track gets the *original* flag, the default audio falls
-  back to English and the video language is left as it is.
+- Track names for languages outside the `LANGUAGES` table fall back to the language code (e.g. `KA`), and their
+  language tags are left as they are.
 - **Attachments are always removed**, fonts included: ASS/SSA subtitles that rely on embedded fonts will fall back to
   default fonts (a warning is printed).
 - `--movie` applies to every movie file of the run: use it on one movie at a time.

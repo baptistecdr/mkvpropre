@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .config import LANGS
+from .config import find_language
 
 # mkvpropedit property name -> key in `mkvmerge -J` track properties
 PROPERTY_KEYS = {
@@ -94,9 +94,8 @@ def remuxed_props(props: dict) -> dict:
     """mkvmerge fills in a missing IETF language tag from the legacy one."""
     if props.get("language_ietf"):
         return props
-    legacy = (props.get("language") or "und").lower()
-    ietf = next((key for key, spec in LANGS.items() if legacy in spec.codes), None)
-    return props | {"language_ietf": ietf} if ietf else props
+    lang = find_language(props.get("language"))
+    return props | {"language_ietf": lang.code} if lang and lang.code != "und" else props
 
 
 def remap_content(content: dict[int, ContentStats], order: list[int]) -> dict[int, ContentStats]:

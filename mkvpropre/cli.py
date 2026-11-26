@@ -1,15 +1,17 @@
 """Normalize MKV episodes and movies: track order, names, languages and flags.
 
-Target layout, VO first (here an English VO; a French film swaps EN and FR):
-  1. Video                      name = episode / movie title, default
-  2. Audio VO (English)         "Anglais",  default, original
-  3. Audio French               "Français"
-  4. Subs VO (English)          "Anglais"   (+ SDH / forced variants)
-  5. Subs French                "Français", default (+ SDH / forced variants)
-  ...any other tracks are kept, moved to the end, never default.
+Wanted tracks (config.PROFILE), in this order after the video:
+  1. Audio VO                   e.g. "Anglais", default, original
+  2. Audio French (VFF)         "Français"
+  3. Subtitles VO               "Anglais"   (a non-SDH track when there is one)
+  4. Subtitles VO forced        "Anglais (forcés)"
+  5. Subtitles French           "Français", default (a non-SDH track when there is one)
+  6. Subtitles French forced    "Français (forcés)"
+Each slot gets the best matching track: the plain one before SDH, Québec French
+(VFQ), audio description or commentary. A French VO fills the French slots once.
+Everything else is the rest: renamed ("Anglais (SDH)", "Français (VFQ)",
+"Allemand"...), moved to the end, never default; --drop-other-tracks removes it.
 
-The VO (original language) comes first, gets the "original" flag and is the
-default audio.
 Default subtitles: the French full track, unless the VO itself is French; then
 only the French forced track (if any) is default, since full French subtitles
 would just repeat the dialogue.
@@ -51,10 +53,9 @@ from pathlib import Path
 from . import __version__, completion
 from .apply import process
 from .completion import CompletionAction
-from .config import LANGS, Config
+from .config import LANGUAGES, Config
 from .library import LibraryError, library_path, move_to_library
 from .lookup import FileInfo, Lookup, filebot_available
-from .plan import PlanError
 from .tools import ToolError, missing_tools
 
 log = logging.getLogger(__name__)
@@ -122,13 +123,13 @@ def build_parser(defaults: Config) -> argparse.ArgumentParser:
                    help="don't use FileBot: titles left as is, VO from --original (default en)")
 
     lg = ap.add_argument_group("languages")
-    lg.add_argument("--original", choices=sorted(LANGS),
+    lg.add_argument("--original", choices=sorted(set(LANGUAGES) - {"und"}),
                     help="VO, instead of FileBot's original language")
-    lg.add_argument("--default-subs", choices=[*sorted(LANGS), "none"], default=defaults.default_subs,
+    lg.add_argument("--default-subs", choices=[*sorted(set(LANGUAGES) - {"und"}), "none"], default=defaults.default_subs,
                     help="default subtitle language (default %(default)s)")
     lg.add_argument("--drop-other-tracks", action="store_true",
-                    help="remove every track that isn't the video or English / French audio and subtitles "
-                         "(other languages, commentaries, unknown); the VO audio is always kept")
+                    help="remove the rest: every track the profile doesn't want (other languages, SDH when "
+                         "a plain track exists, VFQ, audio description, commentaries...)")
 
     c = ap.add_argument_group("forced / SDH detection")
     c.add_argument("--no-content", action="store_true",
@@ -184,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         file_cfg, source = file_config(cfg, info, args.original)
         try:
             changed += process(f, file_cfg, info.title, args.dry_run, source)
-        except (PlanError, ToolError, OSError, ValueError) as e:
+        except (ToolError, OSError, ValueError) as e:
             log.error("   ✗ skipped: %s", e)
             failed.append(f)
             continue

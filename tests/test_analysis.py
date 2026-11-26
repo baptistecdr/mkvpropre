@@ -7,31 +7,7 @@ import pytest
 
 from mkvpropre.model import ContentStats
 from mkvpropre.subtitles import ANALYZERS, SDH_MARKERS, analyze_pgs, analyze_text, analyze_vobsub, parse_text_events
-from mkvpropre.plan import detect_lang
-from conftest import track
 
-
-# --- detect_lang -----------------------------------------------------------------
-
-@pytest.mark.parametrize("lang, ietf, name, expected", [
-    ("eng", "en", None, "en"),
-    ("fre", "fr", None, "fr"),
-    ("fra", None, None, "fr"),            # ISO 639-2/T spelling
-    ("fre", "fr-CA", None, "fr"),         # regional tag -> primary subtag
-    ("und", None, "VO", "en"),            # name fallback
-    ("und", None, "VFF", "fr"),
-    ("und", None, "VOSTFR", "fr"),        # French subtitles, not "VO"
-    (None, None, "English SDH", "en"),
-    ("und", None, "Français (forcés)", "fr"),
-    ("ger", "de", "DE", None),            # not a configured language
-    ("und", None, None, None),
-])
-def test_detect_lang(cfg, lang, ietf, name, expected):
-    assert detect_lang(track(0, "audio", lang=lang, ietf=ietf, name=name), cfg) == expected
-
-
-def test_language_tag_wins_over_name(cfg):
-    assert detect_lang(track(0, "audio", lang="eng", ietf="en", name="FR"), cfg) == "en"
 
 
 # --- text subtitles ----------------------------------------------------------------
