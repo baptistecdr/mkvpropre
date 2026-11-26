@@ -101,9 +101,11 @@ def test_metadata_variant(props, expected):
 # --- the profile ----------------------------------------------------------------------------------
 
 def test_profile_is_vo_then_french():
-    assert PROFILE == (Slot("audio", VO), Slot("audio", "fr"), Slot("subtitles", VO),
-                       Slot("subtitles", VO, forced=True), Slot("subtitles", "fr"),
-                       Slot("subtitles", "fr", forced=True))
+    assert [(s.kind, s.lang, s.forced) for s in PROFILE] == [
+        ("audio", VO, False), ("audio", "fr", False), ("subtitles", VO, False),
+        ("subtitles", VO, True), ("subtitles", "fr", False), ("subtitles", "fr", True)]
+    assert [s.default for s in PROFILE] == [True, True, False, False, True, True]
+    assert [s.foreign_only for s in PROFILE] == [False, False, True, False, True, False]
 
 
 def test_french_vo_fills_the_french_slots_once_without_full_subtitles():
@@ -219,11 +221,11 @@ def test_wanted_tracks_then_the_rest_renamed(cfg):
         (14, "Espagnol", "0"),
     ]
     assert plan.dropped == () and plan.needs_remux
-    assert [tp.kind for tp in plan.tracks][-8:] == [Kind.OTHER] * 8
+    assert [tp.kind for tp in plan.tracks][-8:] == [Kind.REST] * 8
 
 
 def test_the_rest_gets_accurate_flags_and_languages(cfg):
-    rest = {tp.track.id: tp.target for tp in by_kind(make_plan(full_house(), cfg, "Film"), Kind.OTHER)}
+    rest = {tp.track.id: tp.target for tp in by_kind(make_plan(full_house(), cfg, "Film"), Kind.REST)}
     assert rest[0]["flag-hearing-impaired"] == "1" and rest[0]["flag-original"] == "1"
     assert rest[1]["language-ietf"] == "fr-CA"
     assert rest[4]["flag-visual-impaired"] == "1"
@@ -270,7 +272,7 @@ def test_two_french_dubs_are_no_longer_ambiguous(cfg):
               track(3, "audio", lang="fre", name="VF 5.1", audio_channels=6))
     plan = make_plan(m, cfg, None)
     assert [tp.track.id for tp in by_kind(plan, Kind.AUDIO)] == [1, 3]      # the 5.1 one
-    assert [tp.track.id for tp in by_kind(plan, Kind.OTHER)] == [2]
+    assert [tp.track.id for tp in by_kind(plan, Kind.REST)] == [2]
 
 
 def test_commentary_is_never_the_main_audio_when_there_is_another(cfg):
@@ -355,20 +357,31 @@ def test_vo_audio_missing_is_reported(cfg):
     assert by_kind(plan, Kind.AUDIO)[0].target["flag-default"] == "1"    # French becomes the default
 
 
-@pytest.mark.parametrize("default_subs, expected", [
-    (None, ["0", "0"]),
-    ("fr", ["0", "1"]),
-    ("en", ["0", "0"]),   # English audio: only an English *forced* track could be default, there is none
-])
-def test_default_subs(cfg, user_file, default_subs, expected):
-    plan = make_plan(user_file, replace(cfg, default_subs=default_subs), None)
-    assert [tp.target["flag-default"] for tp in by_kind(plan, Kind.SUBS)] == expected
+def test_defaults_come_from_the_profile(cfg, user_file):
+    # English film: the first default audio slot (VO) and the first default subtitle slot (French full)
+    plan = make_plan(user_file, cfg, None)
+    assert [(tp.track.id, tp.target["flag-default"]) for tp in plan.tracks if tp.kind is not Kind.VIDEO] == [
+        (1, "1"), (2, "0"), (3, "0"), (4, "1")]
 
 
-def test_default_subs_english_under_french_audio(cfg):
-    plan = make_plan(french_film(), replace(cfg, default_subs="en").with_original("fr"), None)
-    rest = {tp.track.id: tp.target["flag-default"] for tp in plan.tracks}
-    assert rest[3] == "0"      # English subtitles are the rest for a French film: never default
+def test_french_forced_is_default_when_there_are_no_full_french_subtitles(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="eng"), track(2, "subtitles", lang="eng"),
+              track(3, "subtitles", lang="fre", name="Forced", forced_track=True),
+              content={2: stats(1300, 0.0), 3: stats(20, 0.0)}, duration_ns=100 * 60 * 10**9)
+    assert {tp.track.id: tp.target["flag-default"] for tp in by_kind(make_plan(m, cfg, None), Kind.SUBS)} == \
+        {2: "0", 3: "1"}
+
+
+def test_a_profile_without_default_subtitles(cfg, user_file):
+    profile = tuple(replace(s, default=False) if s.kind == "subtitles" else s for s in PROFILE)
+    plan = make_plan(user_file, replace(cfg, profile=profile), None)
+    assert [tp.target["flag-default"] for tp in by_kind(plan, Kind.SUBS)] == ["0", "0"]
+
+
+def test_duplicate_slots_keep_the_default(cfg):
+    # French film: "VO forced" (not a default slot) and "French forced" (a default slot) are the same
+    [*_, (forced, lang)] = resolve(PROFILE, "fr", "fr")
+    assert (forced.kind, lang, forced.forced, forced.default) == ("subtitles", "fr", True, True)
 
 
 # --- --drop-other-tracks safety ---------------------------------------------------------------------

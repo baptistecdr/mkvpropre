@@ -75,22 +75,23 @@ VO = "vo"   # stands for the original language of the movie / series (from FileB
 @dataclass(frozen=True)
 class Slot:
     """One wanted track. The best matching track of the file fills it (see plan.rank)."""
-    kind: str               # "audio" or "subtitles"
-    lang: str               # language code, or VO
-    forced: bool = False    # subtitles: the forced track rather than the full one
+    kind: str                   # "audio" or "subtitles"
+    lang: str                   # language code, or VO
+    forced: bool = False        # subtitles: the forced track rather than the full one
+    default: bool = False       # the first filled default slot of each kind is the default track
+    foreign_only: bool = False  # only for a film that isn't in your native language (Config.native)
 
 
 # Kept in this order, right after the video. Anything else is "the rest": renamed, moved to
 # the end, never default, and removed with --drop-other-tracks. When the VO is French, the
-# French slots are the VO ones and are only filled once, and since French is the native
-# language, its full subtitles aren't wanted then: only the forced ones (see Config.native).
+# French slots are the VO ones and are only filled once.
 PROFILE: tuple[Slot, ...] = (
-    Slot("audio", VO),
-    Slot("audio", "fr"),
-    Slot("subtitles", VO),
+    Slot("audio", VO, default=True),
+    Slot("audio", "fr", default=True),                        # default when there is no VO audio
+    Slot("subtitles", VO, foreign_only=True),
     Slot("subtitles", VO, forced=True),
-    Slot("subtitles", "fr"),
-    Slot("subtitles", "fr", forced=True),
+    Slot("subtitles", "fr", foreign_only=True, default=True),  # a French film doesn't need them
+    Slot("subtitles", "fr", forced=True, default=True),        # so its forced ones are the default
 )
 
 
@@ -98,8 +99,7 @@ PROFILE: tuple[Slot, ...] = (
 class Config:
     profile: tuple[Slot, ...] = PROFILE
     original: str = "en"             # VO (ISO 639-1): first audio, default audio, "original" flag
-    native: str = "fr"               # your language: a film in it only keeps its forced subtitles
-    default_subs: str | None = "fr"  # default subtitle language; None: no default subtitles
+    native: str = "fr"               # your language: skips the foreign_only slots for a film in it
     use_content: bool = True         # analyse subtitle content for forced/SDH
     drop_other: bool = False         # remove the rest (tracks the profile doesn't want)
     forced_max_ratio: float = 0.25   # forced if < 25% of the fullest same-language track
@@ -116,7 +116,7 @@ class Kind(Enum):
     VIDEO = "video"
     AUDIO = "audio"
     SUBS = "subtitles"
-    OTHER = "other"     # the rest
+    REST = "rest"       # tracks the profile doesn't want
 
 
 class Variant(Enum):

@@ -125,8 +125,6 @@ def build_parser(defaults: Config) -> argparse.ArgumentParser:
     lg = ap.add_argument_group("languages")
     lg.add_argument("--original", choices=sorted(set(LANGUAGES) - {"und"}),
                     help="VO, instead of FileBot's original language")
-    lg.add_argument("--default-subs", choices=[*sorted(set(LANGUAGES) - {"und"}), "none"], default=defaults.default_subs,
-                    help="default subtitle language (default %(default)s)")
     lg.add_argument("--drop-other-tracks", action="store_true",
                     help="remove the rest: every track the profile doesn't want (other languages, SDH when "
                          "a plain track exists, VFQ, audio description, commentaries...)")
@@ -171,7 +169,6 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = replace(defaults, use_content=not args.no_content, forced_max_ratio=args.forced_ratio,
                   forced_max_per_min=args.forced_per_min, sdh_min_ratio=args.sdh_ratio,
-                  default_subs=None if args.default_subs == "none" else args.default_subs,
                   drop_other=args.drop_other_tracks)
     files = find_files(args.paths)
     lookup = Lookup(db=args.titles_db, lang=args.titles_lang, show=args.show, movie=args.movie,

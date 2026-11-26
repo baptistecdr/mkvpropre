@@ -133,7 +133,6 @@ mkvpropre --library /media/raid/cinema "/media/raid/downloads/Amelie.2001.MULTI.
 | `--no-filebot` | | Don't use FileBot: titles left as is, VO from `--original` (default `en`) |
 | **Languages** | | |
 | `--original LANG` | from FileBot | Force the VO (`en`, `fr`, `ja`…) |
-| `--default-subs LANG` | `fr` | Default subtitle language, or `none` |
 | `--drop-other-tracks` | | Remove the rest: every track the profile doesn't want (SDH next to plain subtitles, VFQ, audio description, commentaries, other languages) |
 | **Forced / SDH detection** | | |
 | `--no-content` | | Use only existing flags and track names |
@@ -152,7 +151,7 @@ mkvpropre --library /media/raid/cinema "/media/raid/downloads/Amelie.2001.MULTI.
 ### Shell completion
 
 mkvpropre prints its own completion script for bash, zsh and fish: options with their descriptions, the values of
-`--original`, `--default-subs` and `--titles-db`, folders after `--library`, and `.mkv` files and folders for the paths.
+`--original` and `--titles-db`, folders after `--library`, and `.mkv` files and folders for the paths.
 
 ```bash
 # zsh: in ~/.zshrc, after compinit
@@ -244,17 +243,23 @@ The wanted tracks are a plain list in [`mkvpropre/config.py`](mkvpropre/config.p
 
 ```python
 PROFILE = (
-    Slot("audio", VO),
-    Slot("audio", "fr"),
-    Slot("subtitles", VO),
+    Slot("audio", VO, default=True),
+    Slot("audio", "fr", default=True),                        # default when there is no VO audio
+    Slot("subtitles", VO, foreign_only=True),
     Slot("subtitles", VO, forced=True),
-    Slot("subtitles", "fr"),
-    Slot("subtitles", "fr", forced=True),
+    Slot("subtitles", "fr", foreign_only=True, default=True),  # a French film doesn't need them
+    Slot("subtitles", "fr", forced=True, default=True),        # so its forced ones are the default
 )
 ```
 
-Adding `Slot("audio", "en")` would always keep English audio too, removing the French lines would keep the VO only.
-`native = "fr"` in `Config` is the language you understand: a film in it only keeps its forced subtitles.
+- **Order**: the wanted tracks follow this order, right after the video.
+- **`default`**: the first filled default slot of each kind is the default track: the VO audio, and the French full
+  subtitles, or the French forced ones when there are no full ones (a French film).
+- **`foreign_only`**: skipped for a film in your native language (`native = "fr"` in `Config`), so a French film
+  keeps no full subtitles, only the forced ones.
+
+Adding `Slot("audio", "en")` would always keep English audio too; removing `default=True` from the subtitle lines
+would leave no subtitles on by default.
 Track names come from the `LANGUAGES` table in the same file.
 
 ### --drop-other-tracks
