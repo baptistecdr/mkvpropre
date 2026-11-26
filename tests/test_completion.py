@@ -43,7 +43,6 @@ def test_script_syntax(shell, tmp_path):
 def test_options_metadata():
     by_name = {o.longs[0]: o for o in options(PARSER) if o.longs}
     assert {"en", "fr", "ja", "de"} <= set(by_name["--original"].words) and "und" not in by_name["--original"].words
-    assert {"en", "fr", "none"} <= set(by_name["--default-subs"].words)
     assert by_name["--titles-db"].words == ("TheMovieDB::TV", "TheTVDB", "TVmaze")
     assert by_name["--library"].dirs and by_name["--library"].takes_value
     assert not by_name["--dry-run"].takes_value
@@ -97,7 +96,6 @@ def media_dir(tmp_path):
 
 def test_bash_choices(tmp_path):
     assert complete_bash(tmp_path, "--original", "f") == ["fi", "fr"]
-    assert complete_bash(tmp_path, "--default-subs", "non") == ["none"]
     assert complete_bash(tmp_path, "--titles-db", "TheT") == ["TheTVDB"]
 
 

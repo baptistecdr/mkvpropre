@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .config import VO, Config, Kind, Slot, Variant, find_language, language_label
 from .model import ContentStats, MediaFile, Track
@@ -215,20 +215,21 @@ def candidates(media: MediaFile, cfg: Config, notes: list[str]) -> list[Candidat
 
 
 def resolve(profile: tuple[Slot, ...], vo: str, native: str) -> list[tuple[Slot, str]]:
-    """Slots with VO replaced by its language; a slot that appears twice (French VO) only once.
-
-    A film in your native language doesn't need its full subtitles: only the forced ones
-    (foreign lines, signs) are wanted then.
-    """
-    seen, slots = set(), []
+    """The slots for this film: VO replaced by its language, foreign_only slots skipped for a
+    film in your native language, and a slot that appears twice (French VO) kept once, a
+    default candidate if either was."""
+    slots: dict[tuple, tuple[Slot, str]] = {}
     for slot in profile:
-        lang = vo if slot.lang == VO else slot.lang
-        if slot.kind == "subtitles" and not slot.forced and lang == vo == native:
+        if slot.foreign_only and vo == native:
             continue
-        if (slot.kind, lang, slot.forced) not in seen:
-            seen.add((slot.kind, lang, slot.forced))
-            slots.append((slot, lang))
-    return slots
+        lang = vo if slot.lang == VO else slot.lang
+        key = (slot.kind, lang, slot.forced)
+        if key in slots:
+            first, _ = slots[key]
+            slots[key] = (replace(first, default=first.default or slot.default), lang)
+        else:
+            slots[key] = (slot, lang)
+    return list(slots.values())
 
 
 # --- Targets -------------------------------------------------------------------------------------
@@ -282,15 +283,11 @@ def make_plan(media: MediaFile, cfg: Config, title: str | None) -> Plan:
             warnings.append(f"no {language_label(lang)} {slot.kind}" + (" (VO)" if lang == cfg.original else ""))
     rest = [c for c in pool if c.track.id not in taken]
 
-    # Defaults: the first audio (the VO); subtitles in --default-subs, but only the forced
-    # track when the default audio is already in that language (full ones would repeat it)
+    # Defaults: the first filled default slot of each kind
+    def first_default(kind: str) -> Candidate | None:
+        return next((c for slot, _, c in chosen if c.kind == kind and slot.default), None)
+    default_audio, default_sub = first_default("audio"), first_default("subtitles")
     audio = [c for _, _, c in chosen if c.kind == "audio"]
-    default_audio = audio[0] if audio else None
-    default_sub = None
-    if cfg.default_subs:
-        want_forced = default_audio is not None and default_audio.lang == cfg.default_subs
-        default_sub = next((c for slot, lang, c in chosen if c.kind == "subtitles"
-                            and lang == cfg.default_subs and slot.forced == want_forced), None)
 
     plans: list[TrackPlan] = []
     for i, t in enumerate(videos):
@@ -312,14 +309,14 @@ def make_plan(media: MediaFile, cfg: Config, title: str | None) -> Plan:
             warnings.append("kept, no wanted audio track: " + ", ".join(c.track.describe() for c in kept))
         rest, others = kept, []
     for c in rest:
-        plans.append(TrackPlan(c.track, Kind.OTHER, target(c, cfg, default=False)))
+        plans.append(TrackPlan(c.track, Kind.REST, target(c, cfg, default=False)))
     for t in others:
-        plans.append(TrackPlan(t, Kind.OTHER, {"flag-default": "0"}))
+        plans.append(TrackPlan(t, Kind.REST, {"flag-default": "0"}))
 
     if dropped:
         warnings.append("removing: " + ", ".join(t.describe() for t in dropped))
     if rest or others:
-        warnings.append("kept at the end: " + ", ".join(tp.track.describe() for tp in plans if tp.kind is Kind.OTHER))
+        warnings.append("kept at the end: " + ", ".join(tp.track.describe() for tp in plans if tp.kind is Kind.REST))
     if len(videos) != 1:
         warnings.append(f"{len(videos)} video tracks found")
     if title is None:
