@@ -5,11 +5,10 @@ from dataclasses import replace
 
 import pytest
 
-from mkvpropre.config import Kind, Variant
+from mkvpropre.config import PROFILE, VO, Kind, Slot, Variant
 from mkvpropre.model import Attachment, PROPERTY_KEYS
-from mkvpropre.plan import (ContentVerdict, Plan, PlanError, TrackPlan, content_verdicts,
-                                decide_variant, is_audio_description, is_quebec, language_order, make_plan,
-                                metadata_variant)
+from mkvpropre.plan import (ContentVerdict, Plan, TrackPlan, content_verdicts, decide_variant, detect_lang,
+                            is_audio_description, is_quebec, make_plan, metadata_variant, resolve)
 from conftest import media, stats, track
 
 
@@ -19,6 +18,11 @@ def by_kind(plan: Plan, kind: Kind) -> list[TrackPlan]:
 
 def sets(args: list[str]) -> list[str]:
     return [args[i + 1] for i, a in enumerate(args) if a == "--set"]
+
+
+def layout(plan: Plan) -> list[tuple]:
+    """(track id, name, default) for every kept track, in target order."""
+    return [(tp.track.id, tp.target.get("name"), tp.target["flag-default"]) for tp in plan.tracks]
 
 
 # --- content verdicts ------------------------------------------------------------------
@@ -94,7 +98,48 @@ def test_metadata_variant(props, expected):
     assert metadata_variant(track(3, "subtitles", name=name, **props)) is expected
 
 
-# --- make_plan: the user's file ------------------------------------------------------------
+# --- the profile ----------------------------------------------------------------------------------
+
+def test_profile_is_vo_then_french():
+    assert PROFILE == (Slot("audio", VO), Slot("audio", "fr"), Slot("subtitles", VO),
+                       Slot("subtitles", VO, forced=True), Slot("subtitles", "fr"),
+                       Slot("subtitles", "fr", forced=True))
+
+
+def test_french_vo_fills_the_french_slots_once_without_full_subtitles():
+    # French is the native language: a French film only wants its forced subtitles
+    assert [(s.kind, lang, s.forced) for s, lang in resolve(PROFILE, "fr", "fr")] == [
+        ("audio", "fr", False), ("subtitles", "fr", True)]
+
+
+def test_foreign_vo_keeps_both_full_subtitles():
+    assert [(s.kind, lang, s.forced) for s, lang in resolve(PROFILE, "en", "fr")] == [
+        ("audio", "en", False), ("audio", "fr", False), ("subtitles", "en", False),
+        ("subtitles", "en", True), ("subtitles", "fr", False), ("subtitles", "fr", True)]
+
+
+def test_native_language_comes_from_config():
+    # someone whose native language is English: an English film only wants English forced subtitles
+    assert ("subtitles", "en", False) not in [(s.kind, lang, s.forced) for s, lang in resolve(PROFILE, "en", "en")]
+
+
+@pytest.mark.parametrize("lang, ietf, name, expected", [
+    ("eng", "en", None, "en"),
+    ("fra", None, None, "fr"),
+    ("fre", "fr-CA", None, "fr"),
+    ("ger", "de", None, "de"),
+    ("jpn", None, None, "ja"),
+    ("und", None, "VFF", "fr"),           # name fallback when the tag says nothing
+    ("und", None, "VOSTFR", "fr"),
+    (None, None, "English SDH", "en"),
+    ("und", None, None, "und"),
+    ("kat", "ka", None, "ka"),            # no label for it, kept as is
+])
+def test_detect_lang(lang, ietf, name, expected):
+    assert detect_lang(track(0, "audio", lang=lang, ietf=ietf, name=name)) == expected
+
+
+# --- your file ------------------------------------------------------------------------------------
 
 def test_user_file_targets(cfg, user_file):
     plan = make_plan(user_file, cfg, "Pilot")
@@ -103,25 +148,20 @@ def test_user_file_targets(cfg, user_file):
     assert video.target == {"flag-default": "1", "flag-forced": "0", "language": "eng",
                             "language-ietf": "en", "name": "Pilot"}
     assert en_audio.target == {"name": "Anglais", "language": "eng", "language-ietf": "en",
-                               "flag-original": "1", "flag-default": "1", "flag-forced": "0",
+                               "flag-default": "1", "flag-forced": "0", "flag-original": "1",
                                "flag-commentary": "0", "flag-visual-impaired": "0"}
     assert fr_audio.target["name"] == "Français" and fr_audio.target["flag-default"] == "0"
-    assert fr_audio.target["flag-original"] == "0"
-    assert en_sub.target | {} == {"name": "Anglais", "language": "eng", "language-ietf": "en",
-                                  "flag-original": "1", "flag-default": "0", "flag-forced": "0",
-                                  "flag-hearing-impaired": "0"}
+    assert en_sub.target == {"name": "Anglais", "language": "eng", "language-ietf": "en", "flag-default": "0",
+                             "flag-forced": "0", "flag-original": "1", "flag-hearing-impaired": "0"}
     assert fr_sub.target["flag-default"] == "1" and fr_sub.target["name"] == "Français"
 
 
 def test_user_file_propedit_args_only_contain_changes(cfg, user_file):
     args = make_plan(user_file, cfg, "Pilot").propedit_args()
     assert args[:4] == ["--edit", "info", "--set", "title=Pilot"]
-    assert "--edit" in args and "track:@2" in args
     s = sets(args)
-    assert "language=eng" not in s            # already right on every track
-    assert "flag-forced=0" not in s           # already unset
+    assert "language=eng" not in s and "flag-forced=0" not in s      # already right
     assert "name=Anglais" in s and "flag-original=1" in s
-    assert "--tags" not in args and "--delete-attachment" not in args
 
 
 def test_normalized_file_has_nothing_to_do(cfg, user_file):
@@ -132,6 +172,257 @@ def test_normalized_file_has_nothing_to_do(cfg, user_file):
         for tp in plan.tracks))
     assert make_plan(done, cfg, "Pilot").propedit_args() == []
 
+
+# --- your rules: VO + French, plain subtitles preferred, forced kept, the rest at the end --------
+
+def full_house():
+    """Every kind of track, deliberately in a bad order."""
+    return media(
+        track(0, "subtitles", lang="eng", name="English SDH", flag_hearing_impaired=True),
+        track(1, "audio", lang="fre", ietf="fr-CA", name="VFQ", audio_channels=6),
+        track(2, "video"),
+        track(3, "audio", lang="eng", name="English", audio_channels=6),
+        track(4, "audio", lang="fre", name="VF AD", audio_channels=6),
+        track(5, "audio", lang="fre", ietf="fr-FR", name="VFF", audio_channels=6),
+        track(6, "audio", lang="ger", name="Deutsch", audio_channels=6),
+        track(7, "audio", lang="eng", name="Director's commentary", audio_channels=2),
+        track(8, "subtitles", lang="eng", name="English"),
+        track(9, "subtitles", lang="eng", name="English Forced", forced_track=True),
+        track(10, "subtitles", lang="fre", ietf="fr-CA", name="VFQ"),
+        track(11, "subtitles", lang="fre", name="French SDH", flag_hearing_impaired=True),
+        track(12, "subtitles", lang="fre", name="French"),
+        track(13, "subtitles", lang="fre", name="French Forced", forced_track=True),
+        track(14, "subtitles", lang="spa", name="Spanish"),
+        content={0: stats(1500, 0.15), 8: stats(1300, 0.0), 9: stats(30, 0.0), 10: stats(1310, 0.0),
+                 11: stats(1450, 0.12), 12: stats(1280, 0.0), 13: stats(35, 0.0), 14: stats(1250, 0.0)},
+        duration_ns=120 * 60 * 10**9)
+
+
+def test_wanted_tracks_then_the_rest_renamed(cfg):
+    plan = make_plan(full_house(), cfg, "Film")
+    assert layout(plan) == [
+        (2, "Film", "1"),
+        (3, "Anglais", "1"),                    # audio VO
+        (5, "Français", "0"),                   # audio VFF
+        (8, "Anglais", "0"),                    # subtitles VO, plain rather than SDH
+        (9, "Anglais (forcés)", "0"),           # subtitles VO forced
+        (12, "Français", "1"),                  # subtitles French, plain rather than SDH or VFQ
+        (13, "Français (forcés)", "0"),         # subtitles French forced
+        # the rest, in file order, renamed, never default
+        (0, "Anglais (SDH)", "0"),
+        (1, "Français (VFQ)", "0"),
+        (4, "Français (AD)", "0"),
+        (6, "Allemand", "0"),
+        (7, "Anglais (commentaire)", "0"),
+        (10, "Français (VFQ)", "0"),
+        (11, "Français (SDH)", "0"),
+        (14, "Espagnol", "0"),
+    ]
+    assert plan.dropped == () and plan.needs_remux
+    assert [tp.kind for tp in plan.tracks][-8:] == [Kind.OTHER] * 8
+
+
+def test_the_rest_gets_accurate_flags_and_languages(cfg):
+    rest = {tp.track.id: tp.target for tp in by_kind(make_plan(full_house(), cfg, "Film"), Kind.OTHER)}
+    assert rest[0]["flag-hearing-impaired"] == "1" and rest[0]["flag-original"] == "1"
+    assert rest[1]["language-ietf"] == "fr-CA"
+    assert rest[4]["flag-visual-impaired"] == "1"
+    assert rest[6]["language"] == "ger" and rest[6]["flag-original"] == "0"
+    assert rest[7]["flag-commentary"] == "1"
+    assert rest[10]["language-ietf"] == "fr-CA"
+
+
+def test_drop_other_tracks_removes_the_rest(cfg):
+    plan = make_plan(full_house(), replace(cfg, drop_other=True), "Film")
+    assert [t.id for t in plan.dropped] == [0, 1, 4, 6, 7, 10, 11, 14]
+    assert plan.order == [2, 3, 5, 8, 9, 12, 13]
+    assert any(w.startswith("removing: #0 subtitles eng 'English SDH'") for w in plan.warnings)
+
+
+@pytest.mark.parametrize("drop", [False, True])
+def test_plan_is_stable_after_the_remux(cfg, drop):
+    c = replace(cfg, drop_other=drop)
+    first = make_plan(full_house(), c, "Film")
+    second = make_plan(first.media.reordered(first.order), c, "Film")
+    assert second.dropped == () and not second.needs_remux
+    assert [tp.target for tp in first.tracks] == [tp.target for tp in second.tracks]
+
+
+def test_sdh_fills_the_slot_when_there_is_no_plain_track(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="eng"), track(2, "audio", lang="fre"),
+              track(3, "subtitles", lang="fre", name="French SDH", flag_hearing_impaired=True),
+              content={3: stats(1500, 0.2)})
+    [sub] = by_kind(make_plan(m, cfg, None), Kind.SUBS)
+    assert (sub.target["name"], sub.target["flag-default"], sub.target["flag-hearing-impaired"]) == \
+        ("Français (SDH)", "1", "1")
+
+
+def test_vfq_fills_the_french_slot_when_there_is_no_vff(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="eng"),
+              track(2, "audio", lang="fre", ietf="fr-CA", name="VFQ"))
+    [_, fr] = by_kind(make_plan(m, cfg, None), Kind.AUDIO)
+    assert (fr.track.id, fr.target["name"], fr.target["language-ietf"]) == (2, "Français (VFQ)", "fr-CA")
+
+
+def test_two_french_dubs_are_no_longer_ambiguous(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="eng"),
+              track(2, "audio", lang="fre", name="VF 2.0", audio_channels=2),
+              track(3, "audio", lang="fre", name="VF 5.1", audio_channels=6))
+    plan = make_plan(m, cfg, None)
+    assert [tp.track.id for tp in by_kind(plan, Kind.AUDIO)] == [1, 3]      # the 5.1 one
+    assert [tp.track.id for tp in by_kind(plan, Kind.OTHER)] == [2]
+
+
+def test_commentary_is_never_the_main_audio_when_there_is_another(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="eng", name="Commentary", audio_channels=6),
+              track(2, "audio", lang="eng", name="English", audio_channels=2))
+    assert [tp.track.id for tp in by_kind(make_plan(m, cfg, None), Kind.AUDIO)] == [2]
+
+
+def test_missing_tracks_are_reported(cfg):
+    plan = make_plan(media(track(0, "video"), track(1, "audio", lang="eng")), cfg, None)
+    assert "no Français audio" in plan.warnings
+    assert "no Anglais subtitles (VO)" in plan.warnings and "no Français subtitles" in plan.warnings
+    assert not any("forced" in w for w in plan.warnings)                   # forced tracks are optional
+
+
+def test_only_first_video_is_default(cfg):
+    plan = make_plan(media(track(0, "video"), track(1, "video")), cfg, None)
+    assert [tp.target["flag-default"] for tp in plan.tracks] == ["1", "0"]
+    assert "2 video tracks found" in plan.warnings
+
+
+def test_no_title_leaves_names_alone(cfg, user_file):
+    plan = make_plan(user_file, cfg, None)
+    assert "name" not in plan.tracks[0].target
+    assert any("no episode title" in w for w in plan.warnings)
+
+
+# --- VO ---------------------------------------------------------------------------------------------
+
+def french_film(forced: bool = True):
+    tracks = [track(0, "video"), track(1, "audio", lang="eng"), track(2, "audio", lang="fre"),
+              track(3, "subtitles", lang="eng"), track(4, "subtitles", lang="fre")]
+    content = {3: stats(1450, 0.0), 4: stats(1500, 0.0)}
+    if forced:
+        tracks.append(track(5, "subtitles", lang="fre", name="Forced"))
+        content[5] = stats(20, 0.0)
+    return media(*tracks, content=content, duration_ns=110 * 60 * 10**9)
+
+
+def test_french_vo_film(cfg):
+    plan = make_plan(french_film(), cfg.with_original("fr"), "Amélie")
+    assert layout(plan) == [
+        (0, "Amélie", "1"),
+        (2, "Français", "1"),                  # VO audio = French
+        (5, "Français (forcés)", "1"),         # only the forced subtitles: French is the native language
+        (1, "Anglais", "0"), (3, "Anglais", "0"), (4, "Français", "0"),   # the rest
+    ]
+    assert plan.tracks[0].target["language-ietf"] == "fr"
+    assert plan.tracks[1].target["flag-original"] == "1"
+
+
+def test_french_vo_film_with_drop_keeps_french_audio_and_forced_only(cfg):
+    plan = make_plan(french_film(), replace(cfg, drop_other=True).with_original("fr"), "Amélie")
+    assert plan.order == [0, 2, 5]
+    assert [t.id for t in plan.dropped] == [1, 3, 4]
+
+
+def test_french_vo_without_forced_track_has_no_subtitles(cfg):
+    plan = make_plan(french_film(forced=False), replace(cfg, drop_other=True).with_original("fr"), None)
+    assert plan.order == [0, 2] and by_kind(plan, Kind.SUBS) == []
+    assert not any("subtitles" in w and w.startswith("no ") for w in plan.warnings)   # not missing: unwanted
+
+
+def test_japanese_vo(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="eng"), track(2, "audio", lang="fre"),
+              track(3, "audio", lang="jpn"), track(4, "subtitles", lang="jpn"), track(5, "subtitles", lang="fre"),
+              content={4: stats(1400, 0.0), 5: stats(1350, 0.0)})
+    plan = make_plan(m, cfg.with_original("ja"), "Le Voyage de Chihiro")
+    assert layout(plan) == [
+        (0, "Le Voyage de Chihiro", "1"),
+        (3, "Japonais", "1"), (2, "Français", "0"),
+        (4, "Japonais", "0"), (5, "Français", "1"),
+        (1, "Anglais", "0"),                    # English is the rest when it isn't the VO
+    ]
+    assert plan.tracks[0].target["language"] == "jpn"
+    assert plan.tracks[1].target["flag-original"] == "1"
+
+
+def test_vo_audio_missing_is_reported(cfg):
+    plan = make_plan(media(track(0, "video"), track(1, "audio", lang="fre")), cfg.with_original("ja"), None)
+    assert "no Japonais audio (VO)" in plan.warnings
+    assert by_kind(plan, Kind.AUDIO)[0].target["flag-default"] == "1"    # French becomes the default
+
+
+@pytest.mark.parametrize("default_subs, expected", [
+    (None, ["0", "0"]),
+    ("fr", ["0", "1"]),
+    ("en", ["0", "0"]),   # English audio: only an English *forced* track could be default, there is none
+])
+def test_default_subs(cfg, user_file, default_subs, expected):
+    plan = make_plan(user_file, replace(cfg, default_subs=default_subs), None)
+    assert [tp.target["flag-default"] for tp in by_kind(plan, Kind.SUBS)] == expected
+
+
+def test_default_subs_english_under_french_audio(cfg):
+    plan = make_plan(french_film(), replace(cfg, default_subs="en").with_original("fr"), None)
+    rest = {tp.track.id: tp.target["flag-default"] for tp in plan.tracks}
+    assert rest[3] == "0"      # English subtitles are the rest for a French film: never default
+
+
+# --- --drop-other-tracks safety ---------------------------------------------------------------------
+
+def test_audio_is_kept_when_no_wanted_audio_exists(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="und"), track(2, "subtitles", lang="spa"))
+    plan = make_plan(m, replace(cfg, drop_other=True), None)
+    assert [t.id for t in plan.dropped] == [2]
+    assert any("kept, no wanted audio track" in w for w in plan.warnings)
+
+
+def test_other_track_types_are_dropped_too(cfg):
+    m = media(track(0, "video"), track(1, "audio", lang="eng"),
+              track(2, "buttons", codec="S_HDMV/TEXTST"))
+    assert [t.id for t in make_plan(m, replace(cfg, drop_other=True), None).dropped] == [2]
+
+
+# --- the real release that started it ----------------------------------------------------------------
+
+def social_reckoning():
+    """The.Social.Reckoning.2026.MULTI.VF2.Ad.2160P.WEBRip...-Amen.mkv, as mkvmerge saw it."""
+    return media(
+        track(0, "video", lang="und", ietf="und", default_track=True),
+        track(1, "audio", lang="fre", ietf="fr-FR", name="French", default_track=True, audio_channels=6),
+        track(2, "audio", lang="fre", ietf="fr-CA", name="French CA", audio_channels=6),
+        track(3, "audio", lang="fre", ietf="fr-FR", name="French AD", audio_channels=6),
+        track(4, "audio", lang="eng", ietf="en", name="English", audio_channels=6),
+        track(5, "subtitles", lang="fre", ietf="fr-FR", name="French Forced", default_track=True, forced_track=True),
+        track(6, "subtitles", lang="fre", ietf="fr-FR", name="French Full"),
+        track(7, "subtitles", lang="fre", ietf="fr-CA", name="French CA Full"),
+        track(8, "subtitles", lang="fre", ietf="fr-CA", name="French CA SDH", flag_hearing_impaired=True),
+        track(9, "subtitles", lang="eng", ietf="en", name="English Full"),
+        track(10, "subtitles", lang="eng", ietf="en", name="English SDH", flag_hearing_impaired=True),
+        content={5: stats(36, 0.0), 6: stats(1911, 0.0), 7: stats(1310, 0.0), 8: stats(1500, 0.12),
+                 9: stats(2045, 0.0), 10: stats(2398, 0.15)},
+        duration_ns=112 * 60 * 10**9)
+
+
+def test_social_reckoning(cfg):
+    plan = make_plan(social_reckoning(), cfg, "The Social Reckoning")
+    assert layout(plan) == [
+        (0, "The Social Reckoning", "1"),
+        (4, "Anglais", "1"), (1, "Français", "0"),
+        (9, "Anglais", "0"),
+        (6, "Français", "1"), (5, "Français (forcés)", "0"),
+        (2, "Français (VFQ)", "0"), (3, "Français (AD)", "0"), (7, "Français (VFQ)", "0"),
+        (8, "Français (SDH, VFQ)", "0"), (10, "Anglais (SDH)", "0"),
+    ]
+
+
+def test_social_reckoning_with_drop(cfg):
+    plan = make_plan(social_reckoning(), replace(cfg, drop_other=True), "The Social Reckoning")
+    assert plan.order == [0, 4, 1, 9, 6, 5]
+    assert [t.id for t in plan.dropped] == [2, 3, 7, 8, 10]
 
 def test_file_title_compared_after_unicode_normalization(cfg, user_file):
     stored = replace(user_file, title="Père et fils")   # "Père et fils", decomposed
@@ -147,186 +438,6 @@ def test_name_compared_after_unicode_normalization(cfg):
     t = track(2, "audio", lang="fre", ietf="fr", name=stored)
     tp = TrackPlan(t, Kind.AUDIO, {"name": "Français"})
     assert tp.changes() == {}
-
-
-# --- make_plan: ordering and defaults ------------------------------------------------------
-
-def test_reorder_to_target_layout(cfg):
-    m = media(
-        track(0, "subtitles", lang="fre"), track(1, "audio", lang="fre"),
-        track(2, "video"), track(3, "audio", lang="eng"), track(4, "subtitles", lang="eng"),
-        track(5, "audio", lang="ger"),
-        content={0: stats(300, 0.0), 4: stats(310, 0.0)})
-    plan = make_plan(m, cfg, None)
-    assert plan.needs_remux
-    assert plan.order == [2, 3, 1, 4, 0, 5]
-    assert plan.tracks[-1].kind is Kind.OTHER and plan.tracks[-1].target == {"flag-default": "0"}
-    assert any("other tracks kept at the end" in w for w in plan.warnings)
-
-
-def test_subtitle_variants_order_and_names(cfg):
-    m = media(
-        track(0, "video"), track(1, "audio", lang="eng"), track(2, "audio", lang="fre"),
-        track(3, "subtitles", lang="fre", name="FR"),            # actually forced
-        track(4, "subtitles", lang="fre", name="FR Forced"),     # actually full
-        track(5, "subtitles", lang="eng", name="Track 5"),       # actually SDH
-        track(6, "subtitles", lang="eng", name="Track 6"),
-        content={3: stats(6, 0.0), 4: stats(190, 0.0), 5: stats(230, 0.17), 6: stats(200, 0.0)})
-    plan = make_plan(m, cfg, None)
-    subs = [(tp.track.id, tp.target["name"], tp.target["flag-default"], tp.target["flag-forced"],
-             tp.target["flag-hearing-impaired"]) for tp in by_kind(plan, Kind.SUBS)]
-    assert subs == [
-        (6, "Anglais", "0", "0", "0"),
-        (5, "Anglais (SDH)", "0", "0", "1"),
-        (4, "Français", "1", "0", "0"),
-        (3, "Français (forcés)", "0", "1", "0"),
-    ]
-    assert any("flags/name said forced" in n for n in plan.notes)
-
-
-def test_sdh_is_default_when_no_plain_french_track(cfg):
-    m = media(track(0, "video"), track(1, "subtitles", lang="fre"), track(2, "subtitles", lang="fre"),
-              content={1: stats(250, 0.2), 2: stats(5, 0.0)})
-    [sdh, forced] = by_kind(make_plan(m, cfg, None), Kind.SUBS)
-    assert sdh.target["name"] == "Français (SDH)" and sdh.target["flag-default"] == "1"
-    assert forced.target["flag-default"] == "0"
-
-
-def test_first_audio_is_default_without_english(cfg):
-    m = media(track(0, "video"), track(1, "audio", lang="fre"))
-    [fr] = by_kind(make_plan(m, cfg, None), Kind.AUDIO)
-    assert fr.target["flag-default"] == "1"
-
-
-def test_commentary_is_not_main_audio(cfg):
-    m = media(track(0, "video"), track(1, "audio", lang="eng"),
-              track(2, "audio", lang="eng", name="Director's commentary"))
-    plan = make_plan(m, cfg, None)
-    assert [tp.track.id for tp in by_kind(plan, Kind.AUDIO)] == [1]
-    assert [tp.track.id for tp in by_kind(plan, Kind.OTHER)] == [2]
-
-
-def test_only_first_video_is_default(cfg):
-    m = media(track(0, "video"), track(1, "video"))
-    plan = make_plan(m, cfg, None)
-    assert [tp.target["flag-default"] for tp in plan.tracks] == ["1", "0"]
-    assert "2 video tracks found" in plan.warnings
-
-
-def test_no_title_leaves_names_alone(cfg, user_file):
-    plan = make_plan(user_file, cfg, None)
-    assert "name" not in plan.tracks[0].target
-    assert "--edit" not in plan.propedit_args()[:2] or plan.propedit_args()[1] != "info"
-    assert any("no episode title" in w for w in plan.warnings)
-
-
-def test_vo_language_from_config(cfg):
-    m = media(track(0, "video"), track(1, "audio", lang="fre"))
-    plan = make_plan(m, replace(cfg, original="fr"), None)
-    assert plan.tracks[0].target["language-ietf"] == "fr"
-    assert plan.tracks[1].target["flag-original"] == "1"
-
-
-def french_film(cfg, *, forced: bool):
-    tracks = [track(0, "video"), track(1, "audio", lang="fre"), track(2, "audio", lang="eng"),
-              track(3, "subtitles", lang="fre"), track(4, "subtitles", lang="eng")]
-    content = {3: stats(1500, 0.0), 4: stats(1450, 0.0)}
-    if forced:
-        tracks.append(track(5, "subtitles", lang="fre"))
-        content[5] = stats(20, 0.0)
-    return make_plan(media(*tracks, content=content, duration_ns=110 * 60 * 10**9), cfg.with_original("fr"), "Amélie")
-
-
-def defaults_of(plan, kind):
-    return {(tp.target.get("language-ietf"), tp.target["name"]): tp.target["flag-default"]
-            for tp in by_kind(plan, kind)}
-
-
-def test_french_vo_film(cfg):
-    plan = french_film(cfg, forced=True)
-    assert plan.tracks[0].target["language-ietf"] == "fr"                    # video = VO
-    assert defaults_of(plan, Kind.AUDIO) == {("fr", "Français"): "1", ("en", "Anglais"): "0"}
-    assert {tp.target["language-ietf"]: tp.target["flag-original"]
-            for tp in by_kind(plan, Kind.AUDIO)} == {"en": "0", "fr": "1"}
-    # French audio: the full French subtitles are not default, the French forced ones are
-    assert defaults_of(plan, Kind.SUBS) == {("en", "Anglais"): "0", ("fr", "Français"): "0",
-                                            ("fr", "Français (forcés)"): "1"}
-
-
-def test_vo_comes_first(cfg):
-    plan = french_film(cfg, forced=True)
-    layout = [(tp.kind.value, tp.target.get("language-ietf"), tp.target.get("name")) for tp in plan.tracks]
-    assert layout == [
-        ("video", "fr", "Amélie"),
-        ("audio", "fr", "Français"), ("audio", "en", "Anglais"),
-        ("subtitles", "fr", "Français"), ("subtitles", "fr", "Français (forcés)"),
-        ("subtitles", "en", "Anglais"),
-    ]
-    assert plan.needs_remux        # the French forced track moves before the English subtitles
-
-
-def test_english_vo_keeps_english_first(cfg, user_file):
-    plan = make_plan(user_file, cfg.with_original("en"), "Pilot")
-    assert [tp.target.get("language-ietf") for tp in plan.tracks] == ["en", "en", "fr", "en", "fr"]
-
-
-@pytest.mark.parametrize("vo, expected", [("en", ["en", "fr"]), ("fr", ["fr", "en"]), ("ja", ["en", "fr"])])
-def test_language_order(cfg, vo, expected):
-    assert language_order(cfg.with_original(vo)) == expected
-
-
-def test_french_vo_film_without_forced_track_has_no_default_subs(cfg):
-    plan = french_film(cfg, forced=False)
-    assert set(defaults_of(plan, Kind.SUBS).values()) == {"0"}
-
-
-def test_default_subs_none(cfg, user_file):
-    plan = make_plan(user_file, replace(cfg, default_subs=None), "Pilot")
-    assert set(defaults_of(plan, Kind.SUBS).values()) == {"0"}
-
-
-def test_default_subs_english_under_french_audio(cfg):
-    plan = french_film(replace(cfg, default_subs="en"), forced=True)
-    assert defaults_of(plan, Kind.SUBS) == {("en", "Anglais"): "1", ("fr", "Français"): "0",
-                                            ("fr", "Français (forcés)"): "0"}
-
-
-def test_default_subs_same_as_audio_language_is_not_full(cfg, user_file):
-    # English audio + --default-subs en: full English subtitles would repeat the dialogue
-    plan = make_plan(user_file, replace(cfg, default_subs="en"), "Pilot")
-    assert set(defaults_of(plan, Kind.SUBS).values()) == {"0"}
-
-
-def test_unsupported_vo(cfg):
-    m = media(track(0, "video", lang="jpn"), track(1, "audio", lang="jpn"), track(2, "audio", lang="eng"),
-              track(3, "audio", lang="fre"))
-    plan = make_plan(m, cfg.with_original("ja"), "Le Voyage de Chihiro")
-    assert "language" not in plan.tracks[0].target                          # video language left as is
-    assert [tp.target["flag-original"] for tp in by_kind(plan, Kind.AUDIO)] == ["0", "0"]
-    assert defaults_of(plan, Kind.AUDIO) == {("en", "Anglais"): "1", ("fr", "Français"): "0"}
-    assert [tp.track.id for tp in by_kind(plan, Kind.OTHER)] == [1]        # Japanese audio kept at the end
-    assert any("VO is 'ja'" in w for w in plan.warnings)
-
-
-def test_with_original(cfg):
-    assert (cfg.with_original("fr").original, cfg.with_original("fr").default_audio) == ("fr", "fr")
-    assert (cfg.with_original("ja").original, cfg.with_original("ja").default_audio) == ("ja", "en")
-
-
-# --- make_plan: ambiguity ------------------------------------------------------------------
-
-def test_two_main_audio_tracks_same_language_is_an_error(cfg):
-    m = media(track(0, "video"), track(1, "audio", lang="fre", ietf="fr-FR", name="VF 5.1"),
-              track(2, "audio", lang="fre", ietf="fr-FR", name="VF 2.0"))
-    with pytest.raises(PlanError, match="2 'fr' audio tracks"):
-        make_plan(m, cfg, None)
-
-
-def test_two_full_subtitle_tracks_same_language_is_an_error(cfg):
-    m = media(track(0, "video"), track(1, "subtitles", lang="eng"), track(2, "subtitles", lang="eng"),
-              content={1: stats(300, 0.0), 2: stats(310, 0.0)})
-    with pytest.raises(PlanError, match="2 'en' full subtitle tracks"):
-        make_plan(m, cfg, None)
 
 
 # --- attachments and tags ------------------------------------------------------------------
@@ -347,7 +458,7 @@ def test_font_warning_only_with_ass(cfg, user_file):
     assert any("fonts" in w for w in make_plan(with_ass, cfg, None).warnings)
 
 
-# --- dry-run simulation of the remux ---------------------------------------------------------
+# --- dry-run simulation of the remux ---------------------------------------------------------------
 
 def test_reordered_simulates_mkvmerge(cfg):
     m = media(track(0, "subtitles", lang="fre"), track(1, "video", lang="und"),
@@ -358,152 +469,10 @@ def test_reordered_simulates_mkvmerge(cfg):
         (0, 1, "video"), (1, 2, "audio"), (2, 3, "subtitles"), (3, 4, "audio")]
     assert r.tracks[1].props["language_ietf"] == "en"      # filled in like mkvmerge does
     assert r.tracks[2].props["language_ietf"] == "fr"
-    assert "language_ietf" not in r.tracks[0].props or r.tracks[0].props["language_ietf"] is None
+    assert r.tracks[3].props["language_ietf"] == "de"
     assert r.content == {2: stats(300, 0.0)}
     assert not r.has_tags                                   # the remux writes no tags
     assert not make_plan(r, cfg, None).needs_remux
-
-
-def test_plan_after_reorder_keeps_decisions(cfg):
-    m = media(track(0, "subtitles", lang="fre", name="FR"), track(1, "subtitles", lang="fre", name="FR Forced"),
-              track(2, "video"), track(3, "audio", lang="eng"),
-              content={0: stats(6, 0.0), 1: stats(190, 0.0)})
-    first = make_plan(m, cfg, None)
-    second = make_plan(m.reordered(first.order), cfg, None)
-    assert [tp.target for tp in first.tracks] == [tp.target for tp in second.tracks]
-
-
-# --- --drop-other-tracks ---------------------------------------------------------------------------
-
-def mixed_file():
-    return media(track(0, "video"), track(1, "audio", lang="eng"), track(2, "audio", lang="fre"),
-                 track(3, "audio", lang="ger", name="DE"),
-                 track(4, "audio", lang="eng", name="Director's commentary"),
-                 track(5, "subtitles", lang="eng"), track(6, "subtitles", lang="spa", name="ES"),
-                 track(7, "subtitles", lang="und"),
-                 content={5: stats(400, 0.0)})
-
-
-def test_other_tracks_are_kept_by_default(cfg):
-    plan = make_plan(mixed_file(), cfg, None)
-    assert plan.dropped == () and [tp.track.id for tp in by_kind(plan, Kind.OTHER)] == [3, 4, 6, 7]
-
-
-def test_drop_other_tracks(cfg):
-    plan = make_plan(mixed_file(), replace(cfg, drop_other=True), None)
-    assert [t.id for t in plan.dropped] == [3, 4, 6, 7]
-    assert plan.order == [0, 1, 2, 5] and plan.needs_remux
-    assert by_kind(plan, Kind.OTHER) == []
-    assert any(w.startswith("removing other tracks: #3 audio ger 'DE'") for w in plan.warnings)
-
-
-def test_dropping_alone_needs_a_remux(cfg):
-    m = media(track(0, "video"), track(1, "audio", lang="eng"), track(2, "subtitles", lang="spa"))
-    plan = make_plan(m, replace(cfg, drop_other=True), None)
-    assert plan.order == [0, 1] and plan.needs_remux
-
-
-def test_vo_audio_is_never_dropped(cfg):
-    m = media(track(0, "video"), track(1, "audio", lang="jpn", ietf="ja"), track(2, "audio", lang="eng"),
-              track(3, "audio", lang="ger", ietf="de"), track(4, "subtitles", lang="jpn", ietf="ja"))
-    plan = make_plan(m, replace(cfg, drop_other=True).with_original("ja"), None)
-    assert [t.id for t in plan.dropped] == [3, 4]                 # Japanese subtitles go, Japanese audio stays
-    assert [tp.track.id for tp in by_kind(plan, Kind.OTHER)] == [1]
-    assert any("it is the VO" in w for w in plan.warnings)
-
-
-def test_audio_is_kept_when_there_is_no_main_audio(cfg):
-    m = media(track(0, "video"), track(1, "audio", lang="und"), track(2, "subtitles", lang="spa"))
-    plan = make_plan(m, replace(cfg, drop_other=True), None)
-    assert [t.id for t in plan.dropped] == [2]
-    assert any("could leave no sound" in w for w in plan.warnings)
-
-
-def test_after_dropping_the_plan_is_stable(cfg):
-    drop_cfg = replace(cfg, drop_other=True)
-    first = make_plan(mixed_file(), drop_cfg, None)
-    second = make_plan(first.media.reordered(first.order), drop_cfg, None)
-    assert second.dropped == () and not second.needs_remux
-
-
-
-# --- Québec French and audio description ---------------------------------------------------------
-
-def social_reckoning():
-    """Real track list of The.Social.Reckoning.2026.MULTI.VF2.Ad.2160P.WEBRip...-Amen.mkv"""
-    return media(
-        track(0, "video", lang="und", ietf="und", default_track=True),
-        track(1, "audio", lang="fre", ietf="fr-FR", name="French", default_track=True),
-        track(2, "audio", lang="fre", ietf="fr-CA", name="French CA"),
-        track(3, "audio", lang="fre", ietf="fr-FR", name="French AD"),
-        track(4, "audio", lang="eng", ietf="en", name="English"),
-        track(5, "subtitles", lang="fre", ietf="fr-FR", name="French Forced", default_track=True, forced_track=True),
-        track(6, "subtitles", lang="fre", ietf="fr-FR", name="French Full"),
-        track(7, "subtitles", lang="fre", ietf="fr-CA", name="French CA Full"),
-        track(8, "subtitles", lang="fre", ietf="fr-CA", name="French CA SDH", flag_hearing_impaired=True),
-        track(9, "subtitles", lang="eng", ietf="en", name="English Full"),
-        track(10, "subtitles", lang="eng", ietf="en", name="English SDH", flag_hearing_impaired=True),
-        content={5: stats(40, 0.0), 6: stats(1300, 0.0), 7: stats(1310, 0.0), 8: stats(1500, 0.12),
-                 9: stats(1290, 0.0), 10: stats(1480, 0.15)},
-        duration_ns=120 * 60 * 10**9)
-
-
-def test_vfq_and_audio_description_are_kept_at_the_end_by_default(cfg):
-    plan = make_plan(social_reckoning(), cfg, "The Social Reckoning")
-    assert plan.dropped == ()
-    layout = [(tp.track.id, tp.kind, tp.target.get("name"), tp.target["flag-default"]) for tp in plan.tracks]
-    assert layout == [
-        (0, Kind.VIDEO, "The Social Reckoning", "1"),
-        (4, Kind.AUDIO, "Anglais", "1"), (1, Kind.AUDIO, "Français", "0"),      # VO first
-        (9, Kind.SUBS, "Anglais", "0"), (10, Kind.SUBS, "Anglais (SDH)", "0"),
-        (6, Kind.SUBS, "Français", "1"), (5, Kind.SUBS, "Français (forcés)", "0"),
-        (2, Kind.OTHER, None, "0"), (3, Kind.OTHER, None, "0"),                # VFQ, AD: untouched, never default
-        (7, Kind.OTHER, None, "0"), (8, Kind.OTHER, None, "0"),
-    ]
-    assert any("other tracks kept at the end: #2 audio fre 'French CA' (Québec French (VFQ)), "
-               "#3 audio fre 'French AD' (audio description)" in w for w in plan.warnings)
-
-
-def test_vfq_and_audio_description_are_removed_with_drop_other(cfg):
-    plan = make_plan(social_reckoning(), replace(cfg, drop_other=True), "x")
-    assert [t.id for t in plan.dropped] == [2, 3, 7, 8]
-    assert [tp.track.id for tp in plan.tracks] == [0, 4, 1, 9, 10, 6, 5]
-    assert any("removing other tracks: #2 audio fre 'French CA' (Québec French (VFQ))" in w for w in plan.warnings)
-
-
-@pytest.mark.parametrize("drop", [False, True])
-def test_plan_is_stable_after_handling_variants(cfg, drop):
-    c = replace(cfg, drop_other=drop)
-    first = make_plan(social_reckoning(), c, "x")
-    second = make_plan(first.media.reordered(first.order), c, "x")
-    assert second.dropped == () and not second.needs_remux
-    assert [tp.target for tp in first.tracks] == [tp.target for tp in second.tracks]
-
-
-def test_french_film_vfq_is_removed_despite_being_french(cfg):
-    # VO French: the VFQ is French too, but the VO is the main French track, so it isn't protected
-    m = media(track(0, "video"), track(1, "audio", lang="fre", ietf="fr-FR", name="VFF"),
-              track(2, "audio", lang="fre", ietf="fr-CA", name="VFQ"), track(3, "audio", lang="eng"))
-    plan = make_plan(m, replace(cfg, drop_other=True).with_original("fr"), "Amélie")
-    assert [t.id for t in plan.dropped] == [2]
-    assert not any("it is the VO" in w for w in plan.warnings)
-
-
-def test_vfq_only_movie_keeps_its_french(cfg):
-    m = media(track(0, "video"), track(1, "audio", lang="eng"),
-              track(2, "audio", lang="fre", ietf="fr-CA", name="VFQ"),
-              track(3, "subtitles", lang="fre", ietf="fr-CA", name="French CA"),
-              content={3: stats(1300, 0.0)})
-    plan = make_plan(m, cfg, None)
-    assert plan.dropped == ()
-    assert [tp.target["name"] for tp in by_kind(plan, Kind.AUDIO)] == ["Anglais", "Français"]
-
-
-def test_audio_description_alone_is_kept(cfg):
-    m = media(track(0, "video"), track(1, "audio", lang="eng"),
-              track(2, "audio", lang="fre", name="French AD"))
-    assert make_plan(m, cfg, None).dropped == ()
-
 
 @pytest.mark.parametrize("props, name, expected", [
     ({"ietf": "fr-CA"}, "French", True),
@@ -530,9 +499,3 @@ def test_is_quebec(props, name, expected):
 ])
 def test_is_audio_description(name, flags, expected):
     assert is_audio_description(track(1, "audio", lang="fre", name=name, **flags)) is expected
-
-
-def test_english_ca_is_not_treated_as_quebec(cfg):
-    m = media(track(0, "video"), track(1, "audio", lang="eng", ietf="en-CA", name="English CA"),
-              track(2, "audio", lang="fre"))
-    assert make_plan(m, cfg, None).dropped == ()

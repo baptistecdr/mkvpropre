@@ -90,9 +90,9 @@ def test_normalize_end_to_end(episode, caplog):
     # mkvpropedit stores names decomposed on macOS: compare in NFC
     assert [(unicodedata.normalize("NFC", n), *rest) for n, *rest in subs] == [
         ("Anglais", "eng", "0", "0", "0", "1"),
-        ("Anglais (SDH)", "eng", "0", "0", "1", "1"),
         ("Français", "fre", "1", "0", "0", "0"),
         ("Français (forcés)", "fre", "0", "1", "0", "0"),
+        ("Anglais (SDH)", "eng", "0", "0", "1", "1"),     # the rest: a plain English track exists
     ]
     assert list(episode.parent.iterdir()) == [episode], "no temp file left behind"
 

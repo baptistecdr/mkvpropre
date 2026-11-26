@@ -1,36 +1,107 @@
-"""Languages, defaults and detection thresholds."""
+"""Languages, the profile of wanted tracks, defaults and detection thresholds."""
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from enum import Enum
 
 
+# --- Languages -------------------------------------------------------------------------------
+
 @dataclass(frozen=True)
-class LangSpec:
-    codes: frozenset[str]          # language tags that mean this language
-    name_pattern: re.Pattern[str]  # track names that mean this language (fallback)
-    iso639_2: str                  # value for the legacy "language" element
-    label: str                     # track name to set
+class Language:
+    code: str                                  # ISO 639-1, the IETF primary subtag: "en"
+    iso639_2: str                              # legacy "language" element: "eng"
+    label: str                                 # track name (in French): "Anglais"
+    aliases: frozenset[str] = frozenset()      # other tags meaning this language: "eng"
+    name_pattern: re.Pattern[str] | None = None  # track names meaning it, when the tag is missing / "und"
 
 
-LANGS: dict[str, LangSpec] = {
-    "en": LangSpec(frozenset({"en", "eng"}),
-                   re.compile(r"^(en|eng|english|anglais|vo)\b", re.I), "eng", "Anglais"),
-    "fr": LangSpec(frozenset({"fr", "fre", "fra"}),
-                   re.compile(r"^(fr|fre|fra|french|fran[cç]ais|vf[fqi]?|vostfr|truefrench)\b", re.I),
-                   "fre", "Français"),
-}
+def _lang(code: str, iso639_2: str, label: str, *aliases: str, names: str | None = None) -> Language:
+    return Language(code, iso639_2, label, frozenset({iso639_2, *aliases}),
+                    re.compile(names, re.I) if names else None)
+
+
+LANGUAGES: dict[str, Language] = {lang.code: lang for lang in (
+    _lang("en", "eng", "Anglais", names=r"^(en|eng|english|anglais|vo)\b"),
+    _lang("fr", "fre", "Français", "fra",
+          names=r"^(fr|fre|fra|french|fran[cç]ais|vf[fqi]?|vostfr|truefrench)\b"),
+    _lang("de", "ger", "Allemand", "deu"),
+    _lang("es", "spa", "Espagnol"),
+    _lang("it", "ita", "Italien"),
+    _lang("pt", "por", "Portugais"),
+    _lang("nl", "dut", "Néerlandais", "nld"),
+    _lang("ja", "jpn", "Japonais"),
+    _lang("ko", "kor", "Coréen"),
+    _lang("zh", "chi", "Chinois", "zho"),
+    _lang("ru", "rus", "Russe"),
+    _lang("pl", "pol", "Polonais"),
+    _lang("sv", "swe", "Suédois"),
+    _lang("da", "dan", "Danois"),
+    _lang("no", "nor", "Norvégien", "nob", "nno", "nb", "nn"),
+    _lang("fi", "fin", "Finnois"),
+    _lang("cs", "cze", "Tchèque", "ces"),
+    _lang("hu", "hun", "Hongrois"),
+    _lang("el", "gre", "Grec", "ell"),
+    _lang("tr", "tur", "Turc"),
+    _lang("ar", "ara", "Arabe"),
+    _lang("he", "heb", "Hébreu"),
+    _lang("hi", "hin", "Hindi"),
+    _lang("th", "tha", "Thaï"),
+    _lang("uk", "ukr", "Ukrainien"),
+    _lang("ro", "rum", "Roumain", "ron"),
+    _lang("und", "und", "Inconnu"),
+)}
+
+
+def find_language(tag: str | None) -> Language | None:
+    """'en', 'eng', 'en-US' -> English; None for an empty or unknown tag."""
+    primary = (tag or "").strip().lower().replace("_", "-").split("-")[0]
+    if not primary:
+        return None
+    return next((lang for lang in LANGUAGES.values() if primary == lang.code or primary in lang.aliases), None)
+
+
+def language_label(code: str) -> str:
+    lang = find_language(code)
+    return lang.label if lang else code.upper()
+
+
+# --- The tracks you want (the profile) -------------------------------------------------------
+
+VO = "vo"   # stands for the original language of the movie / series (from FileBot or --original)
+
+
+@dataclass(frozen=True)
+class Slot:
+    """One wanted track. The best matching track of the file fills it (see plan.rank)."""
+    kind: str               # "audio" or "subtitles"
+    lang: str               # language code, or VO
+    forced: bool = False    # subtitles: the forced track rather than the full one
+
+
+# Kept in this order, right after the video. Anything else is "the rest": renamed, moved to
+# the end, never default, and removed with --drop-other-tracks. When the VO is French, the
+# French slots are the VO ones and are only filled once, and since French is the native
+# language, its full subtitles aren't wanted then: only the forced ones (see Config.native).
+PROFILE: tuple[Slot, ...] = (
+    Slot("audio", VO),
+    Slot("audio", "fr"),
+    Slot("subtitles", VO),
+    Slot("subtitles", VO, forced=True),
+    Slot("subtitles", "fr"),
+    Slot("subtitles", "fr", forced=True),
+)
 
 
 @dataclass(frozen=True)
 class Config:
-    langs: dict[str, LangSpec] = field(default_factory=lambda: dict(LANGS))
-    original: str = "en"             # VO (ISO 639-1): video language, "original" flag, default audio
-    default_audio: str = "en"
-    default_subs: str | None = "fr"  # None: no default subtitles (forced tracks excepted, see plan)
+    profile: tuple[Slot, ...] = PROFILE
+    original: str = "en"             # VO (ISO 639-1): first audio, default audio, "original" flag
+    native: str = "fr"               # your language: a film in it only keeps its forced subtitles
+    default_subs: str | None = "fr"  # default subtitle language; None: no default subtitles
     use_content: bool = True         # analyse subtitle content for forced/SDH
-    drop_other: bool = False         # remove tracks that aren't video / EN / FR (VO audio is always kept)
+    drop_other: bool = False         # remove the rest (tracks the profile doesn't want)
     forced_max_ratio: float = 0.25   # forced if < 25% of the fullest same-language track
     forced_max_per_min: float = 2.0  # or < 2 events per minute
     # SDH if >= 2% of events look like SDH. Regular subtitles score ~0% (112/112
@@ -38,26 +109,17 @@ class Config:
     sdh_min_ratio: float = 0.02
 
     def with_original(self, lang: str) -> Config:
-        """VO = `lang`: it gets the "original" flag and becomes the default audio.
-
-        A VO outside `langs` (e.g. "ja") still clears the "original" flag of the
-        other languages; the default audio then falls back to `default_audio`.
-        """
-        default_audio = lang if lang in self.langs else self.default_audio
-        return replace(self, original=lang, default_audio=default_audio)
+        return replace(self, original=lang)
 
 
 class Kind(Enum):
     VIDEO = "video"
     AUDIO = "audio"
     SUBS = "subtitles"
-    OTHER = "other"
+    OTHER = "other"     # the rest
 
 
 class Variant(Enum):
     FULL = "full"
     SDH = "sdh"
     FORCED = "forced"
-
-
-NAME_SUFFIX = {Variant.FULL: "", Variant.SDH: " (SDH)", Variant.FORCED: " (forcés)"}

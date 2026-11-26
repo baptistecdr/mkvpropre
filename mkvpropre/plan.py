@@ -1,11 +1,18 @@
-"""Decide the target state of a file. Pure logic: no I/O."""
+"""Decide the target state of a file. Pure logic: no I/O.
+
+The profile (config.PROFILE) lists the wanted tracks, in order: VO audio, French
+audio, VO subtitles, VO forced, French subtitles, French forced. Each slot is
+filled with the best matching track (rank: the plain track first, then variants);
+everything else is "the rest": renamed, moved to the end, never default, and
+removed with --drop-other-tracks.
+"""
 from __future__ import annotations
 
 import re
 import unicodedata
 from dataclasses import dataclass
 
-from .config import NAME_SUFFIX, Config, Kind, Variant
+from .config import VO, Config, Kind, Slot, Variant, find_language, language_label
 from .model import ContentStats, MediaFile, Track
 
 FORCED_NAME_RE = re.compile(r"forc[eé]s?|forced", re.I)
@@ -26,33 +33,6 @@ def is_quebec(track: Track) -> bool:
 
 def is_audio_description(track: Track) -> bool:
     return bool(track.props.get("flag_visual_impaired")) or bool(AD_NAME_RE.search(track.name))
-
-
-def split_variants(tracks: list[Track], audio: bool, lang: str) -> tuple[list[Track], list[Track], dict[int, str]]:
-    """Set aside Québec French tracks (audio and subtitles) and audio descriptions.
-
-    Returns (main, variants, reason by track id). Variants become "other" tracks:
-    kept at the end, never default, removed with --drop-other-tracks. They are
-    only set aside when a main track of the same kind remains, so a movie
-    released only in VFQ, or with only an audio-description track, keeps it as
-    its French track.
-    """
-    def variant(t: Track) -> str | None:
-        if lang == "fr" and is_quebec(t):
-            return "Québec French (VFQ)"
-        if audio and is_audio_description(t):
-            return "audio description"
-        return None
-
-    reasons = {t.id: why for t in tracks if (why := variant(t))}
-    main = [t for t in tracks if t.id not in reasons]
-    if not reasons or not main:
-        return tracks, [], {}
-    return main, [t for t in tracks if t.id in reasons], reasons
-
-
-class PlanError(Exception):
-    """The file is ambiguous; it is skipped rather than guessed at."""
 
 
 @dataclass(frozen=True)
@@ -77,7 +57,7 @@ class Plan:
     title: str | None               # wanted file title, None = leave as is
     notes: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
-    dropped: tuple[Track, ...] = () # tracks to remove (--drop-other-tracks)
+    dropped: tuple[Track, ...] = () # the rest, removed with --drop-other-tracks
 
     @property
     def order(self) -> list[int]:
@@ -111,18 +91,6 @@ class ContentVerdict:
     forced: bool | None   # None = unknown
     sdh: bool | None
     reason: str
-
-
-def detect_lang(track: Track, cfg: Config) -> str | None:
-    tag = (track.props.get("language_ietf") or track.props.get("language") or "und").lower()
-    primary = tag.split("-")[0]
-    for key, spec in cfg.langs.items():
-        if primary in spec.codes:
-            return key
-    for key, spec in cfg.langs.items():
-        if spec.name_pattern.search(track.name.strip()):
-            return key
-    return None
 
 
 def content_verdicts(tracks: list[Track], media: MediaFile, cfg: Config) -> dict[int, ContentVerdict]:
@@ -173,182 +141,191 @@ def decide_variant(verdict: ContentVerdict, meta: Variant) -> tuple[Variant, str
     return (Variant.SDH if meta is Variant.SDH else Variant.FULL), "content for forced, flags/name for SDH"
 
 
-def language_order(cfg: Config) -> list[str]:
-    """VO first, then the other configured languages: ["fr", "en"] for a French film."""
-    vo = [cfg.original] if cfg.original in cfg.langs else []
-    return vo + [lang for lang in cfg.langs if lang != cfg.original]
+# --- Candidates: audio and subtitle tracks, as the profile sees them ----------------------------
+
+def detect_lang(track: Track) -> str:
+    """Language code of a track: from its tag, else from its name ("VF", "VOSTFR"...), else "und"."""
+    tag = track.props.get("language_ietf") or track.props.get("language") or ""
+    lang = find_language(tag)
+    if lang and lang.code != "und":
+        return lang.code
+    primary = tag.lower().split("-")[0]
+    if primary and primary != "und":
+        return primary                       # a language mkvpropre has no label for
+    for lang in (find_language("en"), find_language("fr")):
+        if lang and lang.name_pattern and lang.name_pattern.search(track.name.strip()):
+            return lang.code
+    return "und"
 
 
-def default_subtitle_variant(lang: str, groups: dict[Variant, list[Track]],
-                             default_subs: str | None, default_audio: str | None) -> Variant | None:
-    """Which subtitle track of `lang`, if any, is the default one.
+@dataclass(frozen=True)
+class Candidate:
+    track: Track
+    lang: str
+    forced: bool = False       # subtitles
+    sdh: bool = False          # subtitles
+    quebec: bool = False       # French tracks
+    ad: bool = False           # audio description
+    commentary: bool = False   # audio
 
-    - `lang` is not the default subtitle language: none.
-    - Same language as the default audio (e.g. a French film): full subtitles
-      would repeat the dialogue, so only its forced track, if it has one.
-    - Otherwise the full track, or the SDH one when there is no plain full track.
+    @property
+    def kind(self) -> str:
+        return self.track.type
+
+
+def rank(c: Candidate) -> tuple:
+    """Lower is better: the plain track first, then its variants, then the richest audio, then file order."""
+    return (c.commentary, c.ad, c.quebec, c.sdh, -int(c.track.props.get("audio_channels") or 0), c.track.id)
+
+
+def matches(c: Candidate, slot: Slot, lang: str) -> bool:
+    return c.kind == slot.kind and c.lang == lang and (c.kind == "audio" or c.forced == slot.forced)
+
+
+def candidates(media: MediaFile, cfg: Config, notes: list[str]) -> list[Candidate]:
+    langs = {t.id: detect_lang(t) for t in media.tracks}
+    subs_by_lang: dict[str, list[Track]] = {}
+    for t in media.tracks:
+        if t.type == "subtitles":
+            subs_by_lang.setdefault(langs[t.id], []).append(t)
+    variants: dict[int, Variant] = {}
+    for tracks in subs_by_lang.values():
+        verdicts = content_verdicts(tracks, media, cfg)
+        for t in tracks:
+            meta = metadata_variant(t)
+            variant, source = decide_variant(verdicts[t.id], meta)
+            note = f"sub #{t.id} {t.name!r}: {variant.value} ({source}; {verdicts[t.id].reason})"
+            notes.append(note + (f" — flags/name said {meta.value}" if variant is not meta else ""))
+            variants[t.id] = variant
+
+    result = []
+    for t in media.tracks:
+        if t.type not in ("audio", "subtitles"):
+            continue
+        lang = langs[t.id]
+        result.append(Candidate(
+            t, lang,
+            forced=variants.get(t.id) is Variant.FORCED,
+            sdh=variants.get(t.id) is Variant.SDH,
+            quebec=lang == "fr" and is_quebec(t),
+            ad=t.type == "audio" and is_audio_description(t),
+            commentary=t.type == "audio" and bool(t.props.get("flag_commentary") or COMMENTARY_NAME_RE.search(t.name)),
+        ))
+    return result
+
+
+def resolve(profile: tuple[Slot, ...], vo: str, native: str) -> list[tuple[Slot, str]]:
+    """Slots with VO replaced by its language; a slot that appears twice (French VO) only once.
+
+    A film in your native language doesn't need its full subtitles: only the forced ones
+    (foreign lines, signs) are wanted then.
     """
-    if lang != default_subs:
-        return None
-    if lang == default_audio:
-        return Variant.FORCED if groups[Variant.FORCED] else None
-    if groups[Variant.FULL]:
-        return Variant.FULL
-    return Variant.SDH if groups[Variant.SDH] else None
+    seen, slots = set(), []
+    for slot in profile:
+        lang = vo if slot.lang == VO else slot.lang
+        if slot.kind == "subtitles" and not slot.forced and lang == vo == native:
+            continue
+        if (slot.kind, lang, slot.forced) not in seen:
+            seen.add((slot.kind, lang, slot.forced))
+            slots.append((slot, lang))
+    return slots
 
 
-def track_language(track: Track) -> str:
-    """Primary language subtag, e.g. "ja" for "ja-JP" (legacy 3-letter code when there is no IETF tag)."""
-    tag = track.props.get("language_ietf") or track.props.get("language") or "und"
-    return tag.lower().split("-")[0]
+# --- Targets -------------------------------------------------------------------------------------
+
+def track_name(c: Candidate) -> str:
+    """'Anglais', 'Anglais (SDH)', 'Français (forcés)', 'Français (VFQ)', 'Français (AD)'..."""
+    tags = [tag for tag, on in (("SDH", c.sdh), ("forcés", c.forced), ("VFQ", c.quebec),
+                                ("AD", c.ad), ("commentaire", c.commentary)) if on]
+    label = language_label(c.lang)
+    return f"{label} ({', '.join(tags)})" if tags else label
 
 
-def split_other(other: list[Track], has_main_audio: bool, vo: str,
-                vo_has_main_audio: bool) -> tuple[list[Track], list[Track], list[str]]:
-    """Which "other" tracks (other languages, commentary, unknown, VFQ, AD) to remove.
+def language_props(lang: str, quebec: bool = False) -> dict[str, str]:
+    known = find_language(lang)
+    if not known:
+        return {}                            # a language mkvpropre has no table entry for: left as is
+    return {"language": known.iso639_2, "language-ietf": "fr-CA" if quebec else known.code}
 
-    Returns (kept, dropped, reasons for keeping). Never removed:
-    - audio in the VO language when the VO has no main audio track, e.g. the
-      Japanese audio of a Japanese film (the VO isn't a configured language, so
-      its audio is an "other" track). A French film's VFQ is not protected:
-      its VO is the main French track;
-    - any audio, when the file has no English / French audio: removing it
-      could leave a file without sound (e.g. untagged "und" tracks).
-    """
-    kept, dropped, why = [], [], []
-    for t in other:
-        if t.type == "audio" and track_language(t) == vo and not vo_has_main_audio \
-                and not COMMENTARY_NAME_RE.search(t.name):
-            kept.append(t)
-            why.append(f"kept {t.describe()}: it is the VO")
-        elif t.type == "audio" and not has_main_audio:
-            kept.append(t)
-            why.append(f"kept {t.describe()}: no English / French audio, removing it could leave no sound")
-        else:
-            dropped.append(t)
-    return kept, dropped, why
 
+def target(c: Candidate, cfg: Config, default: bool) -> dict[str, str]:
+    t = {"name": track_name(c)} | language_props(c.lang, c.quebec) | {
+        "flag-default": str(int(default)),
+        "flag-forced": str(int(c.forced)),
+        "flag-original": str(int(c.lang == cfg.original)),
+    }
+    if c.kind == "audio":
+        t |= {"flag-commentary": str(int(c.commentary)), "flag-visual-impaired": str(int(c.ad))}
+    else:
+        t |= {"flag-hearing-impaired": str(int(c.sdh))}
+    return t
+
+
+# --- The plan ------------------------------------------------------------------------------------
 
 def make_plan(media: MediaFile, cfg: Config, title: str | None) -> Plan:
     notes: list[str] = []
     warnings: list[str] = []
-    videos: list[Track] = []
-    audio: dict[str, list[Track]] = {k: [] for k in cfg.langs}
-    subs: dict[str, list[Track]] = {k: [] for k in cfg.langs}
-    other: list[Track] = []
+    videos = [t for t in media.tracks if t.type == "video"]
+    others = [t for t in media.tracks if t.type not in ("video", "audio", "subtitles")]
+    pool = candidates(media, cfg, notes)
 
-    for t in media.tracks:
-        lang = detect_lang(t, cfg)
-        if t.type == "video":
-            videos.append(t)
-        elif t.type == "audio" and lang and not (t.props.get("flag_commentary") or COMMENTARY_NAME_RE.search(t.name)):
-            audio[lang].append(t)
-        elif t.type == "subtitles" and lang:
-            subs[lang].append(t)
-        else:
-            other.append(t)
+    # Fill each slot of the profile with its best track
+    chosen: list[tuple[Slot, str, Candidate]] = []
+    taken: set[int] = set()
+    for slot, lang in resolve(cfg.profile, cfg.original, cfg.native):
+        best = min((c for c in pool if c.track.id not in taken and matches(c, slot, lang)), key=rank, default=None)
+        if best:
+            chosen.append((slot, lang, best))
+            taken.add(best.track.id)
+        elif not slot.forced:
+            warnings.append(f"no {language_label(lang)} {slot.kind}" + (" (VO)" if lang == cfg.original else ""))
+    rest = [c for c in pool if c.track.id not in taken]
 
-    # Québec French and audio description: set aside as "other" tracks
-    variant_why: dict[int, str] = {}
-    for lang in cfg.langs:
-        audio[lang], variants, why = split_variants(audio[lang], audio=True, lang=lang)
-        other += variants
-        variant_why |= why
-        subs[lang], variants, why = split_variants(subs[lang], audio=False, lang=lang)
-        other += variants
-        variant_why |= why
-    other.sort(key=lambda t: t.id)          # file order, stable when planning again after the remux
+    # Defaults: the first audio (the VO); subtitles in --default-subs, but only the forced
+    # track when the default audio is already in that language (full ones would repeat it)
+    audio = [c for _, _, c in chosen if c.kind == "audio"]
+    default_audio = audio[0] if audio else None
+    default_sub = None
+    if cfg.default_subs:
+        want_forced = default_audio is not None and default_audio.lang == cfg.default_subs
+        default_sub = next((c for slot, lang, c in chosen if c.kind == "subtitles"
+                            and lang == cfg.default_subs and slot.forced == want_forced), None)
 
-    def describe(t: Track) -> str:
-        return t.describe() + (f" ({variant_why[t.id]})" if t.id in variant_why else "")
+    plans: list[TrackPlan] = []
+    for i, t in enumerate(videos):
+        video = {"flag-default": str(int(i == 0)), "flag-forced": "0"} | language_props(cfg.original)
+        if title:
+            video["name"] = title
+        plans.append(TrackPlan(t, Kind.VIDEO, video))
+    for _, _, c in chosen:
+        plans.append(TrackPlan(c.track, Kind.AUDIO if c.kind == "audio" else Kind.SUBS,
+                               target(c, cfg, default=c is default_audio or c is default_sub)))
 
-    # Sanity checks
-    if len(videos) != 1:
-        warnings.append(f"{len(videos)} video tracks found")
-    for lang, tracks in audio.items():
-        if len(tracks) > 1:
-            raise PlanError(f"{len(tracks)} '{lang}' audio tracks, can't tell which one is the main one: "
-                            + ", ".join(t.describe() for t in tracks))
-        if not tracks:
-            warnings.append(f"no '{lang}' audio track")
-    for lang, tracks in subs.items():
-        if not tracks:
-            warnings.append(f"no '{lang}' subtitle track")
+    # The rest: renamed, at the end, never default; removed with --drop-other-tracks
     dropped: list[Track] = []
     if cfg.drop_other:
-        other, dropped, kept_why = split_other(other, has_main_audio=any(audio.values()), vo=cfg.original,
-                                               vo_has_main_audio=bool(audio.get(cfg.original)))
-        warnings += kept_why
-        if dropped:
-            warnings.append("removing other tracks: " + ", ".join(describe(t) for t in dropped))
-    if other:
-        warnings.append("other tracks kept at the end: " + ", ".join(describe(t) for t in other))
+        keep_audio = not audio            # never leave a file without sound
+        kept = [c for c in rest if keep_audio and c.kind == "audio"]
+        dropped = [c.track for c in rest if c not in kept] + others
+        if kept:
+            warnings.append("kept, no wanted audio track: " + ", ".join(c.track.describe() for c in kept))
+        rest, others = kept, []
+    for c in rest:
+        plans.append(TrackPlan(c.track, Kind.OTHER, target(c, cfg, default=False)))
+    for t in others:
+        plans.append(TrackPlan(t, Kind.OTHER, {"flag-default": "0"}))
+
+    if dropped:
+        warnings.append("removing: " + ", ".join(t.describe() for t in dropped))
+    if rest or others:
+        warnings.append("kept at the end: " + ", ".join(tp.track.describe() for tp in plans if tp.kind is Kind.OTHER))
+    if len(videos) != 1:
+        warnings.append(f"{len(videos)} video tracks found")
     if title is None:
         warnings.append("no episode title found, video track name and file title left as is")
     if any(a.is_font for a in media.attachments) and \
             any(t.codec in ("S_TEXT/ASS", "S_TEXT/SSA") for t in media.tracks):
         warnings.append("fonts will be removed while ASS/SSA subtitles are present: "
                         "their styling may fall back to default fonts")
-
-    def lang_props(lang: str, name: str) -> dict[str, str]:
-        spec = cfg.langs[lang]
-        return {"name": name, "language": spec.iso639_2, "language-ietf": lang,
-                "flag-original": str(int(lang == cfg.original))}
-
-    plans: list[TrackPlan] = []
-
-    # Video: language = VO (left as is when the VO isn't a configured language)
-    for i, t in enumerate(videos):
-        target = {"flag-default": str(int(i == 0)), "flag-forced": "0"}
-        if cfg.original in cfg.langs:
-            target |= {"language": cfg.langs[cfg.original].iso639_2, "language-ietf": cfg.original}
-        if title:
-            target["name"] = title
-        plans.append(TrackPlan(t, Kind.VIDEO, target))
-
-    # Audio and subtitles: VO first, then the other languages in configured order
-    order = language_order(cfg)
-
-    # Audio: the configured default language (the VO), else the first language present
-    default_audio = cfg.default_audio if audio.get(cfg.default_audio) else \
-        next((lang for lang in order if audio[lang]), None)
-    if cfg.original not in cfg.langs:
-        warnings.append(f"VO is '{cfg.original}', not one of {', '.join(cfg.langs)}: no track gets the "
-                        f"original flag, and the default audio is '{default_audio}'")
-    for lang in order:
-        for t in audio[lang]:
-            target = lang_props(lang, cfg.langs[lang].label) | {
-                "flag-default": str(int(lang == default_audio)), "flag-forced": "0",
-                "flag-commentary": "0", "flag-visual-impaired": "0"}
-            plans.append(TrackPlan(t, Kind.AUDIO, target))
-
-    # Subtitles: full, SDH, forced per language
-    for lang in order:
-        groups: dict[Variant, list[Track]] = {v: [] for v in Variant}
-        verdicts = content_verdicts(subs[lang], media, cfg)
-        for t in subs[lang]:
-            meta = metadata_variant(t)
-            variant, source = decide_variant(verdicts[t.id], meta)
-            note = f"sub #{t.id} {t.name!r}: {variant.value} ({source}; {verdicts[t.id].reason})"
-            if variant is not meta:
-                note += f" — flags/name said {meta.value}"
-            notes.append(note)
-            groups[variant].append(t)
-        for variant, tracks in groups.items():
-            if len(tracks) > 1:
-                raise PlanError(f"{len(tracks)} '{lang}' {variant.value} subtitle tracks: "
-                                + ", ".join(t.describe() for t in tracks))
-        default_variant = default_subtitle_variant(lang, groups, cfg.default_subs, default_audio)
-        for variant in (Variant.FULL, Variant.SDH, Variant.FORCED):
-            for t in groups[variant]:
-                target = lang_props(lang, cfg.langs[lang].label + NAME_SUFFIX[variant]) | {
-                    "flag-default": str(int(variant is default_variant)),
-                    "flag-forced": str(int(variant is Variant.FORCED)),
-                    "flag-hearing-impaired": str(int(variant is Variant.SDH))}
-                plans.append(TrackPlan(t, Kind.SUBS, target))
-
-    # Anything else: kept, never default
-    for t in other:
-        plans.append(TrackPlan(t, Kind.OTHER, {"flag-default": "0"}))
-
     return Plan(media, tuple(plans), title, tuple(notes), tuple(warnings), tuple(dropped))
